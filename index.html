@@ -157,6 +157,18 @@ a{color:var(--accent)}
   </div>
 </div>
 
+<div id="recover" style="display:none">
+  <div class="lbox">
+    <div class="login-logo" id="recoverLogo"></div>
+    <div class="ls">Set A New Password</div>
+    <div id="rcvwho" style="color:var(--gray-500);font-size:12px;text-align:center;margin-bottom:14px"></div>
+    <input id="np1" type="password" placeholder="New password (min 8 characters)" autocomplete="new-password">
+    <input id="np2" type="password" placeholder="Confirm new password" autocomplete="new-password">
+    <button class="pri" id="npbtn">Update password</button>
+    <div id="nperr"></div>
+  </div>
+</div>
+
 <div id="app" style="display:none">
 <header>
   <div class="brand">
@@ -454,8 +466,60 @@ document.getElementById('btnOverdue').onclick=e=>{
 const PLAZA_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 302.24 167.42" aria-hidden="true"><path fill="#020000" d="M59,147.89h5.08L72.16,167H66.51l-1.38-3.39H57.79L56.44,167H50.9Zm4.62,11.65-2.12-5.4-2.15,5.4Z"/><path fill="#020000" d="M76.8,164.22l2.94-3.51A9.73,9.73,0,0,0,85.9,163c1.41,0,2.17-.49,2.17-1.3v-.06c0-.78-.62-1.22-3.2-1.81-4.05-.93-7.17-2.07-7.17-6v-.05c0-3.54,2.8-6.09,7.36-6.09a11.94,11.94,0,0,1,7.82,2.53L90.25,154a9.57,9.57,0,0,0-5.33-1.88c-1.27,0-1.9.55-1.9,1.23v0c0,.87.65,1.25,3.29,1.85,4.37,1,7.09,2.36,7.09,5.92v0c0,3.89-3.07,6.2-7.69,6.2A13.29,13.29,0,0,1,76.8,164.22Z"/><path fill="#020000" d="M98.75,164.22l2.93-3.51a9.76,9.76,0,0,0,6.17,2.28c1.41,0,2.17-.49,2.17-1.3v-.06c0-.78-.63-1.22-3.21-1.81-4-.93-7.17-2.07-7.17-6v-.05c0-3.54,2.8-6.09,7.36-6.09a12,12,0,0,1,7.83,2.53L112.19,154a9.57,9.57,0,0,0-5.32-1.88c-1.28,0-1.9.55-1.9,1.23v0c0,.87.65,1.25,3.28,1.85,4.38,1,7.09,2.36,7.09,5.92v0c0,3.89-3.07,6.2-7.68,6.2A13.28,13.28,0,0,1,98.75,164.22Z"/><path fill="#020000" d="M121.75,157.59v-.06a10.25,10.25,0,0,1,20.48-.05v.05a10.25,10.25,0,0,1-20.48.06Zm15.1,0v-.06A4.94,4.94,0,0,0,132,152.4a4.85,4.85,0,0,0-4.81,5.08v.05a4.94,4.94,0,0,0,4.87,5.14A4.85,4.85,0,0,0,136.85,157.59Z"/><path fill="#020000" d="M148.83,157.59v-.06a9.76,9.76,0,0,1,10-9.88,9.31,9.31,0,0,1,8.06,4l-4,3.07a5.09,5.09,0,0,0-4.16-2.22c-2.66,0-4.53,2.25-4.53,5v.05c0,2.86,1.87,5.08,4.53,5.08a5.17,5.17,0,0,0,4.29-2.31l4,2.83a10,10,0,0,1-18.22-5.54Z"/><path fill="#020000" d="M173.92,148h5.29v19h-5.29Z"/><path fill="#020000" d="M193.77,147.89h5.08L206.94,167H201.3l-1.39-3.39h-7.33L191.22,167h-5.54Zm4.62,11.65-2.12-5.4-2.15,5.4Z"/><path fill="#020000" d="M215.5,152.64h-5.71V148h16.68v4.61h-5.7V167H215.5Z"/><path fill="#020000" d="M233.29,148h15.29v4.48H238.5v2.88h9.13v4.15H238.5v3h10.21V167H233.29Z"/><path fill="#020000" d="M254.47,164.22l2.93-3.51a9.76,9.76,0,0,0,6.17,2.28c1.41,0,2.17-.49,2.17-1.3v-.06c0-.78-.63-1.22-3.21-1.81-4-.93-7.17-2.07-7.17-6v-.05c0-3.54,2.8-6.09,7.36-6.09a12,12,0,0,1,7.83,2.53L267.91,154a9.57,9.57,0,0,0-5.32-1.88c-1.28,0-1.9.55-1.9,1.23v0c0,.87.65,1.25,3.28,1.85,4.38,1,7.09,2.36,7.09,5.92v0c0,3.89-3.07,6.2-7.68,6.2A13.28,13.28,0,0,1,254.47,164.22Z"/><path fill="#020000" d="M17.84,159.31a8,8,0,0,0,8,8,10.68,10.68,0,0,0,6.28-2c.88.8,1.49,1.37,1.59,1.45L34,167h6.4l-2.81-2.59-3.08-2.81a8.3,8.3,0,0,0,.33-2.3v-2.69H30.56V158l-4.15-3.8-.27-.25a3.18,3.18,0,0,1-1.42-2.5,1.54,1.54,0,0,1,2.92-.69l-.8,1.1,3.1,2.85,2.15-2.37v-.89a5.83,5.83,0,0,0-11.66,0,6.85,6.85,0,0,0,.46,2.48l-2.57,3.32A5,5,0,0,0,17.84,159.31Zm8,3.74a4.79,4.79,0,0,1-3.73-3.74c0-.05,1.45-1.9,1.48-1.87L29,162.37A4.44,4.44,0,0,1,25.86,163.05Z"/><path fill="#020000" d="M131.43,131.6h14.42V36.09c-5.11,5-14.15,17.52-14.42,29.36ZM145.85,0h-.91V17.05c-3.09,2.92-13,13.66-13.48,31.91,4.89-11.17,10.14-17.36,14.39-20.85V16.25h0Zm5.05,53.16V131.6h14.42l0-47.81C165.29,61.82,150.9,53.16,150.9,53.16ZM116.13,131.6h10.26V82.32c-3.61,4.29-8.91,9.18-10.26,20.9ZM42.29,68.88c-5.58-4.53-12.18-6.43-19.21-6.7C15.64,61.89.29,62,0,62v70.25H14.47V116.31h4.71a45.07,45.07,0,0,0,14.13-2.06c7.22-2.43,12.78-6.77,15.74-13.91a29.81,29.81,0,0,0,1.42-17.71A23.07,23.07,0,0,0,42.29,68.88ZM35.59,94.1c-1.3,5.17-5,7.78-10,8.87-3.63.79-7.32.62-11.1.61V74.7c2,0,4-.06,6,0A24.16,24.16,0,0,1,28,76,11.41,11.41,0,0,1,35.73,85,20.44,20.44,0,0,1,35.59,94.1ZM183.52,62V74.64h26.73L177,132.26h54V119.62H200.36L233.82,62ZM77.05,62H62.65v70.26h46.47V119.57H77.05Zm192.24-1L237.57,132.3h14c.1-.23.33-.8.67-1.65A58.25,58.25,0,0,1,265,113.18a66.1,66.1,0,0,1,11.36-8.25c5.16,12.54,11.26,27.37,11.23,27.37,4.82,0,9.64,0,14.62,0C302.05,131.88,269.29,61,269.29,61Zm-8,48.17c-.3.28-.58.57-.87.85,4.45-11.15,8.88-22.28,8.88-22.28s2.15,5.21,5,12.07A73.38,73.38,0,0,0,261.32,109.2Z"/></svg>';
 (function injectLogos(){ ['brandLogo','loginLogo'].forEach(id=>{const el=document.getElementById(id); if(el) el.innerHTML=PLAZA_LOGO_SVG;}); })();
 
+/* ---------------- password recovery (hash-fragment flow) ---------------- */
+function parseHash(){
+  const raw=(window.location.hash||'').replace(/^#/,'');
+  if(!raw) return {};
+  const o={}; new URLSearchParams(raw).forEach((v,k)=>o[k]=v); return o;
+}
+function showRecover(tokens){
+  document.getElementById('login').style.display='none';
+  document.getElementById('app').style.display='none';
+  const el=document.getElementById('recover'); el.style.display='flex';
+  const lg=document.getElementById('recoverLogo'); if(lg) lg.innerHTML=PLAZA_LOGO_SVG;
+  fetch(SB_URL+'/auth/v1/user',{headers:{'apikey':SB_KEY,'Authorization':'Bearer '+tokens.access_token}})
+    .then(r=>r.json()).then(u=>{
+      const w=document.getElementById('rcvwho');
+      if(u&&u.email) w.textContent=u.email;
+    }).catch(()=>{});
+  document.getElementById('npbtn').onclick=async()=>{
+    const a=document.getElementById('np1').value, b=document.getElementById('np2').value;
+    const err=document.getElementById('nperr');
+    if(a.length<8){err.innerHTML='<span class="err">Password must be at least 8 characters.</span>';return;}
+    if(a!==b){err.innerHTML='<span class="err">Passwords do not match.</span>';return;}
+    err.textContent='Updating...';
+    try{
+      const r=await fetch(SB_URL+'/auth/v1/user',{method:'PUT',
+        headers:{'apikey':SB_KEY,'Authorization':'Bearer '+tokens.access_token,'Content-Type':'application/json'},
+        body:JSON.stringify({password:a})});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.msg||d.message||d.error_description||'Update failed');
+      err.innerHTML='<span class="ok">Password updated &check;</span>';
+      SESSION={access_token:tokens.access_token,refresh_token:tokens.refresh_token,
+               expires_at:Date.now()+(Number(tokens.expires_in)||3600)*1000};
+      localStorage.setItem(LS,JSON.stringify(SESSION));
+      history.replaceState(null,'',window.location.pathname);
+      setTimeout(()=>{document.getElementById('recover').style.display='none';boot();},700);
+    }catch(e){err.innerHTML='<span class="err">'+esc(e.message)+'</span>';}
+  };
+  document.getElementById('np2').addEventListener('keydown',e=>{
+    if(e.key==='Enter')document.getElementById('npbtn').click();});
+}
+
 /* restore session on load */
 (async()=>{
+  const hp=parseHash();
+  if(hp.error||hp.error_code){
+    history.replaceState(null,'',window.location.pathname);
+    document.getElementById('login').style.display='flex';
+    document.getElementById('lerr').textContent=
+      decodeURIComponent((hp.error_description||hp.error||'').replace(/\+/g,' '))
+      +' — request a new reset link.';
+    return;
+  }
+  if(hp.access_token&&(hp.type==='recovery'||hp.type==='invite')){
+    showRecover(hp); return;
+  }
   const raw=localStorage.getItem(LS);
   if(raw){
     try{
