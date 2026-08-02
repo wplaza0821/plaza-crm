@@ -285,12 +285,91 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
 .at{font-size:11px;color:var(--gray-400);font-variant-numeric:tabular-nums}
 .note{font-size:12.5px;color:var(--ink);margin-top:3px;white-space:pre-wrap;line-height:1.55}
 
+/* hamburger — hidden on desktop, shown on phones */
+.burger{display:none;background:#FFFFFF;border:1px solid var(--gray-200);
+  border-radius:var(--radius);width:38px;height:38px;font-size:17px;line-height:1;
+  color:var(--ink);flex:0 0 38px;padding:0}
+.burger:active{background:var(--gray-100)}
+.navscrim{position:fixed;inset:0;background:rgba(2,0,0,.35);z-index:70;display:none}
+.navscrim.on{display:block}
+
+/* ============ PHONE / TABLET ============ */
 @media(max-width:900px){
-  :root{--sidebar:0px}
-  .rail{display:none}
+  :root{--sidebar:0px;--topbar:54px}
   .shell{grid-template-columns:1fr}
-  .search input{width:150px}
-  .canvas{padding:16px 14px 40px}
+  /* rail becomes an off-canvas drawer instead of vanishing entirely */
+  .rail{position:fixed;top:0;left:0;bottom:0;width:262px;max-width:82vw;z-index:71;
+    transform:translateX(-100%);transition:transform .22s ease;height:100vh;
+    box-shadow:var(--shadow-lg);display:flex}
+  .rail.on{transform:translateX(0)}
+  .burger{display:block}
+  .top{padding:0 13px;gap:11px}
+  .top h1{font-size:15.5px}
+  .top .crumb{display:none}
+  .search{margin-left:auto;flex:1;min-width:0}
+  .search input{width:100%;font-size:15px}       /* >=16px avoids iOS zoom-on-focus */
+  .canvas{padding:14px 13px 40px}
+  .kpis{grid-template-columns:repeat(2,1fr);gap:9px;margin-bottom:14px}
+  .kpi{padding:11px 12px}
+  .kpi b{font-size:19px}
+  .kpi small{font-size:10px}
+  /* board: single full-width column, stacked vertically */
+  .board{flex-direction:column;overflow-x:visible;gap:10px}
+  .col{flex:1 1 auto;width:100%;max-height:none}
+  .col-b{max-height:none}
+  /* toolbar wraps into full-width rows */
+  .bar{gap:7px}
+  .seg{flex:1 1 100%}
+  .seg button{flex:1;padding:9px 12px;font-size:13px}
+  .bar select{flex:1 1 46%;font-size:16px;padding:9px 10px}
+  /* drawer takes the whole screen */
+  .drawer{width:100vw;max-width:100vw;border-left:0}
+  .dh{padding:15px 16px}
+  .dh h2{font-size:16px}
+  .db{padding:0 16px 26px}
+  .dh .quick{gap:6px}
+  .dh .quick select{flex:1 1 40%;font-size:16px;padding:8px 9px}
+  /* stack the label/value grid so long values aren't crushed */
+  .grid2{grid-template-columns:1fr;gap:0}
+  .grid2 .k{padding:9px 0 1px;border-bottom:0}
+  .grid2 .v{padding:0 0 9px}
+  .tabs{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .tab{padding:10px 12px;font-size:13px}
+  /* email timeline: tighter rail, no truncation of who/subject */
+  .em{padding-left:38px}
+  .em:not(:last-child):before{left:13px}
+  .avatar{width:27px;height:27px;font-size:10px}
+  .ewho{max-width:100%;white-space:normal}
+  .er1{flex-wrap:wrap;gap:3px 7px}
+  .etime{margin-left:0;width:100%;order:3}
+  .esub,.eprev{white-space:normal}
+  .eprev{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .mailbody{max-height:none}
+  .quoted{max-height:none}
+  /* Touch-friendly controls. iOS Safari auto-zooms the whole page when a focused
+     field is under 16px, so force every text input to 16px on phones. */
+  input,select,textarea{font-size:16px}
+  .rbox textarea,#tabbody textarea,#tabbody input{font-size:16px;line-height:1.6}
+  .search input{font-size:16px}
+  button{min-height:38px}
+  button.sm{min-height:32px}
+  .att .an{max-width:150px}
+  /* tables scroll horizontally rather than squashing */
+  .tbl-wrap{-webkit-overflow-scrolling:touch}
+  table{min-width:660px}
+}
+@media(max-width:430px){
+  .kpis{grid-template-columns:1fr 1fr}
+  .kpi b{font-size:18px}
+  .top h1{font-size:15px}
+  .lbox{padding:30px 22px}
+  .login-logo{width:150px}
+}
+/* devices with a notch / home bar */
+@supports(padding:max(0px)){
+  .canvas{padding-bottom:max(40px,env(safe-area-inset-bottom))}
+  .db{padding-bottom:max(26px,env(safe-area-inset-bottom))}
+  .rail{padding-bottom:env(safe-area-inset-bottom)}
 }
 </style>
 </head>
@@ -327,7 +406,7 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
 <div class="shell">
 
   <!-- left rail -->
-  <aside class="rail">
+  <aside class="rail" id="rail">
     <div class="rail-logo">
       <div id="brandLogo"></div>
       <div class="sub">Deal CRM</div>
@@ -352,6 +431,7 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
   <!-- main -->
   <div class="main">
     <div class="top">
+      <button class="burger" id="burger" aria-label="Menu">&#9776;</button>
       <div>
         <div class="crumb" id="crumb">Workspace</div>
         <h1 id="vtitle">Pipeline</h1>
@@ -371,6 +451,7 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
 </div>
 
 <!-- ============ RECORD DRAWER ============ -->
+<div class="navscrim" id="navscrim" onclick="closeNav()"></div>
 <div class="scrim" id="scrim" onclick="closeDrawer()"></div>
 <div class="drawer" id="drawer"></div>
 
@@ -665,7 +746,9 @@ function closeDrawer(){
   document.getElementById('scrim').classList.remove('on');
   document.getElementById('drawer').classList.remove('on');
   CUR=null;renderView();}
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){
+  if(document.getElementById('rail').classList.contains('on'))return closeNav();
+  closeDrawer();}});
 function draw(){
   const d=CUR;if(!d)return;
   document.getElementById('drawer').innerHTML=`
@@ -875,7 +958,15 @@ async function addNote(){
   loadActs();
 }
 document.getElementById('q').oninput=renderView;
-document.querySelectorAll('#nav a').forEach(a=>a.onclick=()=>{VIEW=a.dataset.v;paint();});
+/* nav: sidebar is an off-canvas drawer on phones, always-visible on desktop */
+function openNav(){document.getElementById('rail').classList.add('on');
+  document.getElementById('navscrim').classList.add('on');}
+function closeNav(){document.getElementById('rail').classList.remove('on');
+  document.getElementById('navscrim').classList.remove('on');}
+document.getElementById('burger').onclick=e=>{
+  e.stopPropagation();
+  document.getElementById('rail').classList.contains('on')?closeNav():openNav();};
+document.querySelectorAll('#nav a').forEach(a=>a.onclick=()=>{VIEW=a.dataset.v;closeNav();paint();});
 
 /* ---------- Plaza logo (inline SVG, identical to Plazacore) ---------- */
 const PLAZA_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 302.24 167.42" aria-hidden="true"><path fill="#020000" d="M59,147.89h5.08L72.16,167H66.51l-1.38-3.39H57.79L56.44,167H50.9Zm4.62,11.65-2.12-5.4-2.15,5.4Z"/><path fill="#020000" d="M76.8,164.22l2.94-3.51A9.73,9.73,0,0,0,85.9,163c1.41,0,2.17-.49,2.17-1.3v-.06c0-.78-.62-1.22-3.2-1.81-4.05-.93-7.17-2.07-7.17-6v-.05c0-3.54,2.8-6.09,7.36-6.09a11.94,11.94,0,0,1,7.82,2.53L90.25,154a9.57,9.57,0,0,0-5.33-1.88c-1.27,0-1.9.55-1.9,1.23v0c0,.87.65,1.25,3.29,1.85,4.37,1,7.09,2.36,7.09,5.92v0c0,3.89-3.07,6.2-7.69,6.2A13.29,13.29,0,0,1,76.8,164.22Z"/><path fill="#020000" d="M98.75,164.22l2.93-3.51a9.76,9.76,0,0,0,6.17,2.28c1.41,0,2.17-.49,2.17-1.3v-.06c0-.78-.63-1.22-3.21-1.81-4-.93-7.17-2.07-7.17-6v-.05c0-3.54,2.8-6.09,7.36-6.09a12,12,0,0,1,7.83,2.53L112.19,154a9.57,9.57,0,0,0-5.32-1.88c-1.28,0-1.9.55-1.9,1.23v0c0,.87.65,1.25,3.28,1.85,4.38,1,7.09,2.36,7.09,5.92v0c0,3.89-3.07,6.2-7.68,6.2A13.28,13.28,0,0,1,98.75,164.22Z"/><path fill="#020000" d="M121.75,157.59v-.06a10.25,10.25,0,0,1,20.48-.05v.05a10.25,10.25,0,0,1-20.48.06Zm15.1,0v-.06A4.94,4.94,0,0,0,132,152.4a4.85,4.85,0,0,0-4.81,5.08v.05a4.94,4.94,0,0,0,4.87,5.14A4.85,4.85,0,0,0,136.85,157.59Z"/><path fill="#020000" d="M148.83,157.59v-.06a9.76,9.76,0,0,1,10-9.88,9.31,9.31,0,0,1,8.06,4l-4,3.07a5.09,5.09,0,0,0-4.16-2.22c-2.66,0-4.53,2.25-4.53,5v.05c0,2.86,1.87,5.08,4.53,5.08a5.17,5.17,0,0,0,4.29-2.31l4,2.83a10,10,0,0,1-18.22-5.54Z"/><path fill="#020000" d="M173.92,148h5.29v19h-5.29Z"/><path fill="#020000" d="M193.77,147.89h5.08L206.94,167H201.3l-1.39-3.39h-7.33L191.22,167h-5.54Zm4.62,11.65-2.12-5.4-2.15,5.4Z"/><path fill="#020000" d="M215.5,152.64h-5.71V148h16.68v4.61h-5.7V167H215.5Z"/><path fill="#020000" d="M233.29,148h15.29v4.48H238.5v2.88h9.13v4.15H238.5v3h10.21V167H233.29Z"/><path fill="#020000" d="M254.47,164.22l2.93-3.51a9.76,9.76,0,0,0,6.17,2.28c1.41,0,2.17-.49,2.17-1.3v-.06c0-.78-.63-1.22-3.21-1.81-4-.93-7.17-2.07-7.17-6v-.05c0-3.54,2.8-6.09,7.36-6.09a12,12,0,0,1,7.83,2.53L267.91,154a9.57,9.57,0,0,0-5.32-1.88c-1.28,0-1.9.55-1.9,1.23v0c0,.87.65,1.25,3.28,1.85,4.38,1,7.09,2.36,7.09,5.92v0c0,3.89-3.07,6.2-7.68,6.2A13.28,13.28,0,0,1,254.47,164.22Z"/><path fill="#020000" d="M17.84,159.31a8,8,0,0,0,8,8,10.68,10.68,0,0,0,6.28-2c.88.8,1.49,1.37,1.59,1.45L34,167h6.4l-2.81-2.59-3.08-2.81a8.3,8.3,0,0,0,.33-2.3v-2.69H30.56V158l-4.15-3.8-.27-.25a3.18,3.18,0,0,1-1.42-2.5,1.54,1.54,0,0,1,2.92-.69l-.8,1.1,3.1,2.85,2.15-2.37v-.89a5.83,5.83,0,0,0-11.66,0,6.85,6.85,0,0,0,.46,2.48l-2.57,3.32A5,5,0,0,0,17.84,159.31Zm8,3.74a4.79,4.79,0,0,1-3.73-3.74c0-.05,1.45-1.9,1.48-1.87L29,162.37A4.44,4.44,0,0,1,25.86,163.05Z"/><path fill="#020000" d="M131.43,131.6h14.42V36.09c-5.11,5-14.15,17.52-14.42,29.36ZM145.85,0h-.91V17.05c-3.09,2.92-13,13.66-13.48,31.91,4.89-11.17,10.14-17.36,14.39-20.85V16.25h0Zm5.05,53.16V131.6h14.42l0-47.81C165.29,61.82,150.9,53.16,150.9,53.16ZM116.13,131.6h10.26V82.32c-3.61,4.29-8.91,9.18-10.26,20.9ZM42.29,68.88c-5.58-4.53-12.18-6.43-19.21-6.7C15.64,61.89.29,62,0,62v70.25H14.47V116.31h4.71a45.07,45.07,0,0,0,14.13-2.06c7.22-2.43,12.78-6.77,15.74-13.91a29.81,29.81,0,0,0,1.42-17.71A23.07,23.07,0,0,0,42.29,68.88ZM35.59,94.1c-1.3,5.17-5,7.78-10,8.87-3.63.79-7.32.62-11.1.61V74.7c2,0,4-.06,6,0A24.16,24.16,0,0,1,28,76,11.41,11.41,0,0,1,35.73,85,20.44,20.44,0,0,1,35.59,94.1ZM183.52,62V74.64h26.73L177,132.26h54V119.62H200.36L233.82,62ZM77.05,62H62.65v70.26h46.47V119.57H77.05Zm192.24-1L237.57,132.3h14c.1-.23.33-.8.67-1.65A58.25,58.25,0,0,1,265,113.18a66.1,66.1,0,0,1,11.36-8.25c5.16,12.54,11.26,27.37,11.23,27.37,4.82,0,9.64,0,14.62,0C302.05,131.88,269.29,61,269.29,61Zm-8,48.17c-.3.28-.58.57-.87.85,4.45-11.15,8.88-22.28,8.88-22.28s2.15,5.21,5,12.07A73.38,73.38,0,0,0,261.32,109.2Z"/></svg>';
