@@ -212,22 +212,72 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
 .err{color:var(--red)}
 .empty{color:var(--gray-400);font-size:13px;padding:26px 4px;text-align:center}
 
-/* email items */
-.em{border:1px solid var(--gray-200);border-radius:var(--radius);padding:11px 13px;
-  margin-bottom:8px;cursor:pointer;background:#FFFFFF}
-.em:hover{border-color:var(--gray-300);background:var(--gray-50)}
-.eh{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
-.es{font-size:13px;font-weight:600;color:var(--black);line-height:1.4}
-.ed{font-size:11px;color:var(--gray-400);white-space:nowrap;font-variant-numeric:tabular-nums}
-.dir{font-size:9.5px;padding:1px 5px;border-radius:3px;font-weight:700;letter-spacing:.5px}
-.dir.in{background:var(--accent-bg);color:var(--accent)}
-.dir.out{background:var(--gray-100);color:var(--gray-500)}
-.ep{font-size:12px;color:var(--gray-500);margin-top:5px;line-height:1.5}
-.kwtag{font-size:9.5px;color:var(--gray-400);border:1px solid var(--gray-200);
-  border-radius:3px;padding:0 4px;margin-left:6px;text-transform:uppercase;letter-spacing:.4px}
-.body{white-space:pre-wrap;font-size:12.5px;line-height:1.65;color:var(--ink);
+/* ===== email timeline (HubSpot/Salesforce activity-feed pattern) ===== */
+.thread{display:flex;flex-direction:column;gap:0}
+.em{position:relative;padding:0 0 4px 44px;border:0;background:none;margin:0}
+/* vertical connector line down the avatar rail */
+.em:not(:last-child):before{content:'';position:absolute;left:15px;top:34px;bottom:0;
+  width:1px;background:var(--gray-200)}
+.avatar{position:absolute;left:0;top:4px;width:31px;height:31px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;
+  letter-spacing:.3px;border:1px solid transparent;z-index:1}
+.avatar.in{background:var(--accent-bg);color:var(--accent);border-color:#d3e2e8}
+.avatar.out{background:var(--black);color:#FFFFFF;border-color:var(--black)}
+.ecard{background:#FFFFFF;border:1px solid var(--gray-200);border-radius:var(--radius);
+  margin-bottom:9px;overflow:hidden;transition:border-color .15s,box-shadow .15s}
+.ecard:hover{border-color:var(--gray-300);box-shadow:var(--shadow-sm)}
+.ecard.open{border-color:var(--gray-300);box-shadow:var(--shadow-sm)}
+.ehd{padding:10px 13px;cursor:pointer;display:flex;flex-direction:column;gap:3px}
+.ehd:hover{background:var(--gray-50)}
+.er1{display:flex;align-items:baseline;gap:8px}
+.ewho{font-size:13px;font-weight:600;color:var(--black);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:52%}
+.everb{font-size:11.5px;color:var(--gray-400);white-space:nowrap}
+.etime{margin-left:auto;font-size:11px;color:var(--gray-400);white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+.esub{font-size:12.5px;color:var(--ink);font-weight:500;line-height:1.4;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.eprev{font-size:12px;color:var(--gray-400);line-height:1.5;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.emeta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px}
+.chip{font-size:9.5px;padding:1px 6px;border-radius:3px;font-weight:600;
+  letter-spacing:.4px;text-transform:uppercase;white-space:nowrap}
+.chip.in{background:var(--accent-bg);color:var(--accent)}
+.chip.out{background:var(--gray-100);color:var(--gray-500)}
+.chip.kw{background:transparent;color:var(--gray-400);border:1px solid var(--gray-200)}
+.chip.att{background:var(--gray-100);color:var(--gray-500);text-transform:none;
+  letter-spacing:0;font-weight:500}
+/* expanded body */
+.ebd{border-top:1px solid var(--gray-100);padding:13px}
+.parties{font-size:11.5px;color:var(--gray-500);line-height:1.7;margin-bottom:11px;
+  padding-bottom:10px;border-bottom:1px solid var(--gray-100)}
+.parties .pk{display:inline-block;width:26px;color:var(--gray-400);font-weight:600;
+  text-transform:uppercase;font-size:10px;letter-spacing:.6px}
+.mailbody{font-size:13px;line-height:1.65;color:var(--ink);white-space:pre-wrap;
+  word-break:break-word;max-height:420px;overflow-y:auto}
+.mailbody a{color:var(--accent)}
+.atts{margin-top:12px;display:flex;flex-wrap:wrap;gap:6px}
+.att{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink);
   background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius);
-  padding:12px;margin-top:9px;max-height:340px;overflow-y:auto}
+  padding:5px 9px;max-width:100%}
+.att .an{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px}
+.att .az{color:var(--gray-400);font-size:10.5px;white-space:nowrap}
+.qtoggle{margin-top:11px;background:none;border:0;color:var(--gray-400);font-size:11.5px;
+  padding:3px 0;display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+.qtoggle:hover{color:var(--accent)}
+.qdots{display:inline-block;background:var(--gray-100);border:1px solid var(--gray-200);
+  border-radius:3px;padding:0 6px;letter-spacing:1px;line-height:1.4;color:var(--gray-500)}
+.quoted{display:none;margin-top:9px;padding:11px 13px;background:var(--gray-50);
+  border-left:2px solid var(--gray-200);border-radius:0 var(--radius) var(--radius) 0;
+  font-size:12px;line-height:1.6;color:var(--gray-500);white-space:pre-wrap;
+  max-height:300px;overflow-y:auto}
+.quoted.on{display:block}
+/* reply composer */
+.rbox{margin-top:12px;padding-top:12px;border-top:1px solid var(--gray-100)}
+.rbox textarea{min-height:96px;font-size:13px;line-height:1.6}
+.rhint{font-size:11px;color:var(--gray-400);margin-top:7px}
+.olink{font-size:11.5px;color:var(--gray-400);text-decoration:none;margin-left:auto}
+.olink:hover{color:var(--accent)}
 .act{border-left:2px solid var(--gray-200);padding:0 0 15px 13px;margin-left:5px;position:relative}
 .act:before{content:'';position:absolute;left:-5px;top:3px;width:8px;height:8px;
   border-radius:50%;background:var(--gray-300);border:2px solid #FFFFFF}
@@ -660,6 +710,38 @@ async function saveStage(){
     await load(); CUR=DEALS.find(x=>x.id===CUR.id); draw();
   }catch(e){st.innerHTML='<span class="err">'+esc(e.message)+'</span>';}
 }
+/* ---- email helpers ---- */
+const initials=s=>{
+  const t=String(s||'').replace(/<[^>]*>/g,'').replace(/["']/g,'').trim();
+  if(!t) return '?';
+  const w=t.split(/[\s,]+/).filter(Boolean);
+  if(w.length>=2) return (w[0][0]+w[w.length-1][0]).toUpperCase();
+  return t.slice(0,2).toUpperCase();
+};
+/* HubSpot-style relative time: Today 14:32 / Yesterday / Mar 4 / Mar 4, 2025 */
+const relTime=iso=>{
+  if(!iso) return '';
+  const d=new Date(iso.replace(' ','T'));
+  if(isNaN(d)) return esc(iso.slice(0,16));
+  const now=new Date(), sd=new Date(d).setHours(0,0,0,0), td=new Date().setHours(0,0,0,0);
+  const dd=Math.round((td-sd)/864e5);
+  const hm=d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false});
+  if(dd===0) return 'Today '+hm;
+  if(dd===1) return 'Yesterday '+hm;
+  if(dd<7) return dd+' days ago';
+  const mo=d.toLocaleDateString([], {month:'short',day:'numeric'});
+  return d.getFullYear()===now.getFullYear()?mo:mo+', '+d.getFullYear();
+};
+const fsize=b=>{
+  if(!b) return '';
+  if(b<1024) return b+' B';
+  if(b<1048576) return (b/1024).toFixed(0)+' KB';
+  return (b/1048576).toFixed(1)+' MB';
+};
+/* linkify + escape for mail bodies */
+const bodyHTML=t=>esc(t).replace(/(https?:\/\/[^\s<]+)/g,
+  '<a href="$1" target="_blank" rel="noopener">$1</a>');
+
 async function loadEmails(){
   const b=document.getElementById('tabbody');
   b.innerHTML='<div class="empty">Searching mailbox via Microsoft Graph...</div>';
@@ -668,25 +750,71 @@ async function loadEmails(){
   try{
     const ms=await fn({action:'search',keywords:kws});
     if(!ms.length){b.innerHTML='<div class="empty">No matching emails found.</div>';return;}
-    b.innerHTML=ms.map(m=>`<div class="em" onclick="expand(this,'${m.id}')">
-      <div class="eh"><div class="es">${esc(m.subject)}${m.matchedKeyword?`<span class="kwtag">${esc(m.matchedKeyword)}</span>`:''}</div>
-      <div class="ed"><span class="dir ${m.direction}">${m.direction.toUpperCase()}</span> ${esc((m.date||'').replace('T',' ').slice(0,16))}</div></div>
-      <div class="ep">${m.direction==='in'?'From: '+esc(m.from):'To: '+esc((m.to||[]).join(', '))} — ${esc((m.preview||'').slice(0,150))}</div>
-      <div class="slot"></div></div>`).join('');
+    const head=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <span style="font-size:11.5px;color:var(--gray-400)">${ms.length} message${ms.length>1?'s':''}</span>
+      <span style="font-size:11px;color:var(--gray-400);margin-left:auto">Newest first</span></div>`;
+    b.innerHTML=head+'<div class="thread">'+ms.map(m=>{
+      const who=m.direction==='in'?(m.from||m.from_addr||'Unknown')
+        :((m.to_names&&m.to_names.length?m.to_names:m.to||[]).join(', ')||'—');
+      const verb=m.direction==='in'?'emailed you':'you emailed';
+      return `<div class="em">
+        <div class="avatar ${m.direction}">${esc(initials(who))}</div>
+        <div class="ecard" id="ec_${m.id}">
+          <div class="ehd" onclick="expand('${m.id}')">
+            <div class="er1">
+              <span class="ewho">${esc(who)}</span>
+              <span class="everb">${verb}</span>
+              <span class="etime">${relTime(m.date)}</span>
+            </div>
+            <div class="esub">${esc(m.subject)}</div>
+            <div class="eprev">${esc((m.preview||'').slice(0,160))}</div>
+            <div class="emeta">
+              <span class="chip ${m.direction}">${m.direction==='in'?'Received':'Sent'}</span>
+              ${m.hasAttachments?'<span class="chip att">&#128206; Attachment</span>':''}
+              ${m.cc_count?`<span class="chip att">+${m.cc_count} cc</span>`:''}
+              ${m.matchedKeyword?`<span class="chip kw">${esc(m.matchedKeyword)}</span>`:''}
+            </div>
+          </div>
+          <div class="slot"></div>
+        </div></div>`;
+    }).join('')+'</div>';
   }catch(e){b.innerHTML='<div class="empty err">Email error: '+esc(e.message)+'</div>';}
 }
-async function expand(el,mid){
-  const slot=el.querySelector('.slot');
-  if(slot.dataset.open){slot.innerHTML='';delete slot.dataset.open;return;}
-  slot.dataset.open='1';slot.innerHTML='<div class="body">Loading full message...</div>';
+async function expand(mid){
+  const card=document.getElementById('ec_'+mid);
+  const slot=card.querySelector('.slot');
+  if(slot.dataset.open){slot.innerHTML='';delete slot.dataset.open;card.classList.remove('open');return;}
+  slot.dataset.open='1';card.classList.add('open');
+  slot.innerHTML='<div class="ebd"><div class="empty" style="padding:14px">Loading message...</div></div>';
   try{
     const m=await fn({action:'message',id:mid});
-    slot.innerHTML=`<div class="body">${esc(m.body||'')}</div>
-     <div style="margin-top:8px"><label class="lb">Reply in this thread (reply-all, signature auto-added)</label>
-     <textarea id="rb_${mid}" placeholder="Type your reply..."></textarea>
-     <div class="fl"><button class="pri" onclick="event.stopPropagation();doReply('${mid}')">Send reply</button>
-     <span id="rs_${mid}"></span></div></div>`;
-  }catch(e){slot.innerHTML='<div class="body err">'+esc(e.message)+'</div>';}
+    const list=a=>(a||[]).map(x=>esc(x.name||x.address)).join(', ')||'—';
+    const parties=`<div class="parties">
+      <div><span class="pk">From</span> ${esc(m.from?.name||m.from?.address||'—')}
+        ${m.from?.address&&m.from.name?`<span style="color:var(--gray-400)">&lt;${esc(m.from.address)}&gt;</span>`:''}</div>
+      <div><span class="pk">To</span> ${list(m.to)}</div>
+      ${(m.cc&&m.cc.length)?`<div><span class="pk">Cc</span> ${list(m.cc)}</div>`:''}</div>`;
+    const atts=(m.attachments&&m.attachments.length)?`<div class="atts">${m.attachments.map(a=>
+      `<span class="att">&#128206;<span class="an">${esc(a.name)}</span><span class="az">${fsize(a.size)}</span></span>`).join('')}</div>`:'';
+    const quoted=m.quoted?`<button class="qtoggle" onclick="event.stopPropagation();document.getElementById('q_${mid}').classList.toggle('on')">
+        <span class="qdots">&middot;&middot;&middot;</span> Show earlier messages in this thread</button>
+      <div class="quoted" id="q_${mid}">${bodyHTML(m.quoted)}</div>`:'';
+    slot.innerHTML=`<div class="ebd">
+      ${parties}
+      <div class="mailbody">${bodyHTML(m.body||'(no text content)')}</div>
+      ${atts}
+      ${quoted}
+      <div class="rbox">
+        <label class="lb">Reply to all</label>
+        <textarea id="rb_${mid}" placeholder="Write your reply..."></textarea>
+        <div class="fl">
+          <button class="pri" onclick="event.stopPropagation();doReply('${mid}')">Send reply</button>
+          <span id="rs_${mid}"></span>
+          ${m.webLink?`<a class="olink" href="${esc(m.webLink)}" target="_blank" rel="noopener">Open in Outlook &rarr;</a>`:''}
+        </div>
+        <div class="rhint">Sends from william@plazaandassociates.com with your signature appended.</div>
+      </div></div>`;
+  }catch(e){slot.innerHTML='<div class="ebd err" style="font-size:12.5px">'+esc(e.message)+'</div>';}
 }
 async function doReply(mid){
   const body=document.getElementById('rb_'+mid).value.trim();
