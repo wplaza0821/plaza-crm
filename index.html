@@ -511,6 +511,10 @@ const SB_KEY='sb_publishable_FU92Md7Bi2WojPfUqtKCGw_7pG7Ul6s';
 const FN=SB_URL+'/functions/v1/graph-mail';
 const LS='plaza_crm_session';
 let SESSION=null, DEALS=[], CUR=null, TAB='emails', VIEW='pipeline';
+/* Email thread: show only correspondence the CLIENT is actually a participant in.
+   Default ON — keyword-only matching let 33.8% noise through (vendors, robots,
+   unrelated projects). Toggle in the Email thread tab to see all keyword matches. */
+let CLIENT_ONLY=true;
 let SORT={k:'project_no',dir:1}, FSTAGE='', FPRI='';
 
 const STAGES=["Lead","RFP Received","Proposal Sent","Negotiation","Won-Pending Payment","Won","On Hold","Stale","Lost"];
@@ -844,6 +848,8 @@ function draw(){
   if(TAB==='acts')loadActs();
 }
 function setTab(t){TAB=t;draw();}
+/* Toggle the client-participant gate on the email thread and re-query. */
+function toggleClientOnly(){CLIENT_ONLY=!CLIENT_ONLY;if(TAB==='emails')loadEmails();}
 async function saveStage(){
   const stage=document.getElementById('edStage').value, priority=document.getElementById('edPri').value;
   const st=document.getElementById('sst');st.textContent='Saving...';
@@ -899,12 +905,26 @@ async function loadEmails(){
   const b=document.getElementById('tabbody');
   b.innerHTML='<div class="empty">Searching mailbox via Microsoft Graph...</div>';
   const kws=(CUR.keywords&&CUR.keywords.length)?CUR.keywords:(CUR.contact_email?[CUR.contact_email]:[]);
-  if(!kws.length){b.innerHTML='<div class="empty">No search keywords for this deal.</div>';return;}
+  if(!kws.length&&!CUR.contact_email){b.innerHTML='<div class="empty">No search keywords or client contact for this deal.</div>';return;}
   try{
-    const ms=await fn({action:'search',keywords:kws});
-    if(!ms.length){b.innerHTML='<div class="empty">No matching emails found.</div>';return;}
+    /* Pass contact_email so the function can enforce the CLIENT-PARTICIPANT gate:
+       a keyword says what mail is ABOUT, only the participants say who it's WITH.
+       Without this the thread filled with vendors, robots and unrelated projects.
+       sibling_keywords = keywords of OTHER deals sharing this same client contact
+       (Dome has 3, Terrazas 2, North Bay Villas 3) so the client-address pass can't
+       copy a sibling project's thread into this deal. */
+    const sibs=[...new Set(DEALS.filter(d=>d.id!==CUR.id&&d.contact_email&&CUR.contact_email
+        &&d.contact_email.toLowerCase()===CUR.contact_email.toLowerCase())
+      .flatMap(d=>d.keywords||[]))].filter(k=>!(CUR.keywords||[]).includes(k));
+    const ms=await fn({action:'search',keywords:kws,
+      contact_email:CUR.contact_email||'',strict_client:CLIENT_ONLY,
+      sibling_keywords:sibs});
+    if(!ms.length){b.innerHTML=`<div class="empty">No client correspondence found.${CLIENT_ONLY?' <a href="#" onclick="toggleClientOnly();return false" style="color:var(--accent)">Show all keyword matches</a>':''}</div>`;return;}
     const head=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
       <span style="font-size:11.5px;color:var(--gray-400)">${ms.length} message${ms.length>1?'s':''}</span>
+      <label style="font-size:11px;color:var(--gray-500);display:flex;align-items:center;gap:5px;cursor:pointer">
+        <input type="checkbox" ${CLIENT_ONLY?'checked':''} onchange="toggleClientOnly()" style="width:auto;margin:0">
+        Client mail only</label>
       <span style="font-size:11px;color:var(--gray-400);margin-left:auto">Newest first</span></div>`;
     b.innerHTML=head+'<div class="thread">'+ms.map(m=>{
       const who=m.direction==='in'?(m.from||m.from_addr||'Unknown')
