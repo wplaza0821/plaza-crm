@@ -2,9 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Plaza CRM</title>
-<link rel="icon" href="assets/plaza-logo@3x.png">
+<!-- Home-screen install support (pattern ported from Plazacore). Lets William add
+     the CRM to his iPhone home screen and run it without Safari chrome. -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#020000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Plaza CRM">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="icon" href="assets/icon-192.png">
 <style>
 /* ===== Plazacore design tokens (identical :root) ===== */
 :root{
@@ -346,17 +355,23 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
   .eprev{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
   .mailbody{max-height:none}
   .quoted{max-height:none}
-  /* Touch-friendly controls. iOS Safari auto-zooms the whole page when a focused
-     field is under 16px, so force every text input to 16px on phones. */
-  input,select,textarea{font-size:16px}
-  .rbox textarea,#tabbody textarea,#tabbody input{font-size:16px;line-height:1.6}
-  .search input{font-size:16px}
-  button{min-height:38px}
-  button.sm{min-height:32px}
+  /* ---- Field-crew ergonomics (pattern ported from Plazacore 2026-07-10 pass) ----
+     Plazacore learned these the hard way on Noel's phone; reuse rather than re-derive.
+     1) 16px !important beats every more-specific rule, so a single line kills
+        iOS zoom-on-focus everywhere instead of chasing each selector.
+     2) 44px minimum touch targets per Apple HIG (small/ghost buttons were ~26px). */
+  input,select,textarea{font-size:16px !important}   /* stops iOS zoom-on-focus */
+  button,.tab,.nav a{min-height:44px}
+  button.sm{min-height:36px;min-width:36px}
+  .seg button{min-height:44px}
+  .qtoggle{min-height:36px}
+  .att{min-height:36px}
   .att .an{max-width:150px}
   /* tables scroll horizontally rather than squashing */
   .tbl-wrap{-webkit-overflow-scrolling:touch}
   table{min-width:660px}
+  /* sticky context header while scrolling long lists (Plazacore pattern) */
+  .kpis{position:relative}
 }
 @media(max-width:430px){
   .kpis{grid-template-columns:1fr 1fr}
@@ -364,12 +379,47 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
   .top h1{font-size:15px}
   .lbox{padding:30px 22px}
   .login-logo{width:150px}
+  /* Small-phone trims. Plazacore has a single 768px breakpoint, so a 375px SE gets
+     the same treatment as a 768px tablet; a second stop keeps dense rows usable. */
+  .canvas{padding:12px 11px 36px}
+  .card{padding:10px 11px}
+  .card .cn{font-size:12.5px}
+  .col-h{padding:10px 11px}
+  .dh{padding:13px 13px}
+  .db{padding:0 13px 22px}
+  .em{padding-left:34px}
+  .em:not(:last-child):before{left:11px}
+  .avatar{width:24px;height:24px;font-size:9.5px}
+  .tab{padding:10px 10px;font-size:12.5px}
+  .chip{font-size:9px;padding:1px 5px}
+  .bar select{flex:1 1 100%}
 }
-/* devices with a notch / home bar */
+/* Notch / home-bar devices.
+   NOTE: `viewport-fit=cover` lets content extend into the unsafe areas, so every
+   fixed/edge-anchored surface needs an inset or it sits under the home bar or
+   behind the notch. (Plazacore sets viewport-fit=cover but only uses 2 insets —
+   worth covering more thoroughly here.) */
 @supports(padding:max(0px)){
-  .canvas{padding-bottom:max(40px,env(safe-area-inset-bottom))}
+  .canvas{
+    padding-bottom:max(40px,env(safe-area-inset-bottom));
+    padding-left:max(13px,env(safe-area-inset-left));
+    padding-right:max(13px,env(safe-area-inset-right));
+  }
+  .top{
+    padding-top:env(safe-area-inset-top);
+    height:calc(var(--topbar) + env(safe-area-inset-top));
+    padding-left:max(13px,env(safe-area-inset-left));
+    padding-right:max(13px,env(safe-area-inset-right));
+  }
+  .rail{
+    padding-top:env(safe-area-inset-top);
+    padding-bottom:env(safe-area-inset-bottom);
+    padding-left:env(safe-area-inset-left);
+  }
   .db{padding-bottom:max(26px,env(safe-area-inset-bottom))}
-  .rail{padding-bottom:env(safe-area-inset-bottom)}
+  .dh{padding-top:max(15px,env(safe-area-inset-top))}
+  .drawer{padding-right:env(safe-area-inset-right)}
+  .lbox{margin-bottom:env(safe-area-inset-bottom)}
 }
 </style>
 </head>
