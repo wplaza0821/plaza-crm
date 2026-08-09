@@ -13,7 +13,7 @@ function fixtureDeals() {
       amount: 48000, value_note: null, stage: 'Proposal Sent', priority: 'HIGH',
       proposal_sent_date: daysAgo(30), last_contact_date: daysAgo(20),
       next_action: 'Follow up on proposal', next_action_due: today(),
-      keywords: ['dome'], dropbox_folder: null, evidence: null,
+      keywords: ['dome'], dropbox_folder: '/Proposals/Dome', evidence: null,
     },
     {
       id: 2, name: 'Terrazas Facade', client: 'Terrazas HOA', project_no: '26-102',
@@ -53,6 +53,24 @@ async function stubBackend(page) {
     if (url.pathname.startsWith('/auth/v1/token'))
       return json(route, { access_token: 'fake-token-2', refresh_token: 'r2', expires_in: 3600 });
     if (url.pathname.startsWith('/functions/v1/graph-mail')) return json(route, []);
+    if (url.pathname.startsWith('/functions/v1/dropbox-files')) {
+      if (body?.action === 'list') {
+        return json(route, { files: [
+          { name: 'Dome Proposal Rev2.pdf', path: '/Proposals/Dome/Dome Proposal Rev2.pdf',
+            is_folder: false, size: 482000, modified: new Date().toISOString(), is_pdf: true },
+          { name: 'Site Photos', path: '/Proposals/Dome/Site Photos',
+            is_folder: true, size: null, modified: null, is_pdf: false },
+        ] });
+      }
+      if (body?.action === 'link') return json(route, { url: 'https://dl.example.test/fake' });
+      if (body?.action === 'value') {
+        return json(route, { file: 'Dome Proposal Rev2.pdf', candidates: [
+          { amount: 52500, context: 'Total lump sum fee for the scope described herein: $52,500.00', score: 4 },
+          { amount: 1500, context: 'permit allowance of $1,500', score: -1 },
+        ] });
+      }
+      return json(route, { error: 'unknown action' }, 400);
+    }
 
     if (url.pathname.startsWith('/rest/v1/deals')) {
       const idMatch = url.search.match(/id=eq\.(\d+)/);

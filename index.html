@@ -529,6 +529,7 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
 const SB_URL='https://zhxwkntrndaeqtkmbtsh.supabase.co';
 const SB_KEY='sb_publishable_FU92Md7Bi2WojPfUqtKCGw_7pG7Ul6s';
 const FN=SB_URL+'/functions/v1/graph-mail';
+const FN_DBX=SB_URL+'/functions/v1/dropbox-files';
 const LS='plaza_crm_session';
 let SESSION=null, DEALS=[], CUR=null, TAB='emails', VIEW='pipeline';
 /* Email thread: show only correspondence the CLIENT is actually a participant in.
@@ -623,6 +624,15 @@ async function api(path,opts={}){
 async function fn(payload){
   const t=await tok();
   const r=await fetch(FN,{method:'POST',
+    headers:{'apikey':SB_KEY,'Authorization':'Bearer '+t,'Content-Type':'application/json'},
+    body:JSON.stringify(payload)});
+  const d=await r.json();
+  if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
+  return d;
+}
+async function fnD(payload){
+  const t=await tok();
+  const r=await fetch(FN_DBX,{method:'POST',
     headers:{'apikey':SB_KEY,'Authorization':'Bearer '+t,'Content-Type':'application/json'},
     body:JSON.stringify(payload)});
   const d=await r.json();
@@ -875,12 +885,14 @@ function draw(){
       <div class="tab ${TAB==='emails'?'on':''}" onclick="setTab('emails')">Email thread</div>
       <div class="tab ${TAB==='compose'?'on':''}" onclick="setTab('compose')">Compose follow-up</div>
       <div class="tab ${TAB==='acts'?'on':''}" onclick="setTab('acts')">Activity log</div>
+      <div class="tab ${TAB==='files'?'on':''}" onclick="setTab('files')">Files</div>
       <div class="tab ${TAB==='edit'?'on':''}" onclick="setTab('edit')">Edit</div>
     </div><div id="tabbody"><div class="empty">Loading...</div></div>
   </div>`;
   if(TAB==='emails')loadEmails();
   if(TAB==='compose')loadCompose();
   if(TAB==='acts')loadActs();
+  if(TAB==='files')loadFiles();
   if(TAB==='edit')loadEdit();
 }
 function setTab(t){TAB=t;draw();}
@@ -1036,6 +1048,73 @@ function loadEdit(){
   document.getElementById('tabbody').innerHTML=
     dealFormHTML(CUR)+
     `<div class="fl"><button class="pri" onclick="saveDealForm(${CUR.id})">Save changes</button><span id="dfst"></span></div>`;
+}
+
+/* ---------------- Dropbox files + proposal value scan ---------------- */
+async function loadFiles(){
+  const b=document.getElementById('tabbody');
+  if(!CUR.dropbox_folder){
+    b.innerHTML=`<div class="empty">No Dropbox folder linked to this deal.<br>
+      <span style="font-size:12px">Set one in the <a href="#" onclick="setTab('edit');return false" style="color:var(--accent)">Edit</a> tab
+      (e.g. <code>/Proposals/${esc(CUR.client||'Client')}</code>) to browse proposals here.</span></div>`;
+    return;
+  }
+  b.innerHTML='<div class="empty">Reading Dropbox folder...</div>';
+  try{
+    const d=await fnD({action:'list',path:CUR.dropbox_folder});
+    const fs=d.files||[];
+    if(!fs.length){b.innerHTML='<div class="empty">Folder is empty.</div>';return;}
+    b.innerHTML=`<div style="font-size:11.5px;color:var(--gray-400);margin-bottom:9px">${esc(CUR.dropbox_folder)} &middot; ${fs.length} item${fs.length>1?'s':''}</div>`
+      +fs.map((f,i)=>`<div class="act" style="display:flex;align-items:center;gap:10px">
+        <span style="flex:0 0 18px;text-align:center">${f.is_folder?'&#128193;':(f.is_pdf?'&#128196;':'&#128441;')}</span>
+        <div style="flex:1;min-width:0">
+          <div class="nm" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name)}</div>
+          <div style="font-size:11px;color:var(--gray-400)">${f.modified?esc(relTime(f.modified)):''}${f.size?` &middot; ${fsize(f.size)}`:''}</div>
+        </div>
+        ${f.is_folder?'':`<button class="sm" onclick="openFile(${i})">Open</button>`}
+        ${f.is_pdf?`<button class="sm" onclick="scanValue(${i})">Scan for value</button>`:''}
+      </div>`).join('')
+      +`<div id="scanout"></div>`;
+    window._DBXFILES=fs;
+  }catch(e){
+    b.innerHTML=`<div class="empty"><span class="err">${esc(e.message)}</span><br>
+      <span style="font-size:12px;color:var(--gray-400)">Is the dropbox-files function deployed with Dropbox credentials?</span></div>`;
+  }
+}
+async function openFile(i){
+  const f=window._DBXFILES[i];
+  try{
+    const d=await fnD({action:'link',path:f.path});
+    window.open(d.url,'_blank','noopener');
+  }catch(e){toast('Could not open file: '+e.message,true);}
+}
+async function scanValue(i){
+  const f=window._DBXFILES[i];
+  const out=document.getElementById('scanout');
+  out.innerHTML='<div class="empty">Extracting text and scanning for amounts...</div>';
+  try{
+    const d=await fnD({action:'value',path:f.path});
+    const cs=d.candidates||[];
+    if(!cs.length){out.innerHTML='<div class="empty">No dollar amounts found in this PDF.</div>';return;}
+    out.innerHTML=`<div style="margin-top:12px"><label class="lb">Amounts found in ${esc(d.file)}</label>`
+      +cs.map(c=>`<div class="act" style="display:flex;align-items:center;gap:10px">
+        <b style="flex:0 0 auto;font-variant-numeric:tabular-nums">${money(c.amount)}</b>
+        <div style="flex:1;min-width:0;font-size:11.5px;color:var(--gray-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(c.context)}">${esc(c.context)}</div>
+        <button class="sm pri" onclick="applyValue(${c.amount},'${esc(d.file).replace(/'/g,'&#39;')}')">Use as deal value</button>
+      </div>`).join('')+'</div>';
+  }catch(e){out.innerHTML=`<div class="empty"><span class="err">${esc(e.message)}</span></div>`;}
+}
+async function applyValue(amount,file){
+  try{
+    await api('deals?id=eq.'+CUR.id,{method:'PATCH',
+      body:JSON.stringify({amount,value_note:'from '+file})});
+    try{
+      await api('activities',{method:'POST',
+        body:JSON.stringify({deal_id:CUR.id,kind:'value_set',summary:`Value set to ${money(amount)} from ${file}`})});
+    }catch(_){/* audit-log failure must never mask the value write */}
+    toast('Deal value set to '+money(amount));
+    await load();CUR=DEALS.find(x=>x.id===CUR.id);draw();
+  }catch(e){toast('Could not set value: '+e.message,true);}
 }
 /* ---- email helpers ---- */
 const initials=s=>{

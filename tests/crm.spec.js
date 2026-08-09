@@ -112,6 +112,45 @@ test('plain note does not bump last contact by default', async ({ page }) => {
   expect(captured.some((c) => c.method === 'PATCH' && c.body?.last_contact_date)).toBe(false);
 });
 
+test('Files tab lists the deal Dropbox folder', async ({ page }) => {
+  await stubBackend(page);
+  const errors = await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Files' }).click();
+  await expect(page.locator('.drawer .act', { hasText: 'Dome Proposal Rev2.pdf' })).toBeVisible();
+  await expect(page.locator('.drawer .act', { hasText: 'Site Photos' })).toBeVisible();
+  // folders get no Open button, PDFs get a scan button
+  await expect(page.locator('.drawer button', { hasText: 'Scan for value' })).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
+test('scanning a proposal PDF applies its fee as the deal value', async ({ page }) => {
+  const { captured } = await stubBackend(page);
+  const errors = await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Files' }).click();
+  await page.locator('.drawer button', { hasText: 'Scan for value' }).click();
+  await expect(page.locator('#scanout')).toContainText('$52,500');
+  await expect(page.locator('#scanout')).toContainText('lump sum fee');
+  await page.locator('#scanout button', { hasText: 'Use as deal value' }).first().click();
+  await expect(page.locator('#toast')).toContainText('$52,500');
+  const patch = captured.find((c) => c.method === 'PATCH' && c.path.includes('deals?id=eq.1') && c.body?.amount === 52500);
+  expect(patch).toBeTruthy();
+  expect(patch.body.value_note).toBe('from Dome Proposal Rev2.pdf');
+  expect(captured.some((c) => c.path.startsWith('/rest/v1/activities') && c.body?.kind === 'value_set')).toBe(true);
+  // drawer refreshes with the new amount
+  await expect(page.locator('.drawer .grid2')).toContainText('$52,500');
+  expect(errors).toEqual([]);
+});
+
+test('Files tab explains itself when no folder is linked', async ({ page }) => {
+  await stubBackend(page);
+  await bootCrm(page);
+  await page.locator('.card', { hasText: 'Terrazas Facade' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Files' }).click();
+  await expect(page.locator('#tabbody')).toContainText('No Dropbox folder linked');
+});
+
 test('mobile viewport: burger nav present, board scrolls', async ({ page }) => {
   await stubBackend(page);
   const errors = await bootCrm(page, { viewport: { width: 390, height: 844 } });
