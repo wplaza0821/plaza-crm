@@ -1,0 +1,133 @@
+// CRM test harness: seeds a stored auth session and stubs the Supabase
+// backend (REST + auth + graph-mail edge function) with a STATEFUL in-memory
+// store, so created/edited/moved deals survive the app's re-load() calls.
+
+const today = () => new Date().toISOString().slice(0, 10);
+const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+
+// Rows mirror the deals_value view the app reads: the economics columns
+// (proposal_fee/options_nte/rate/term_months/ca_fee) plus legacy `amount`,
+// which dealValue() still honors as a fallback.
+function fixtureDeals() {
+  return [
+    {
+      id: 1, name: 'Dome Repairs', client: 'Dome Condo Assn', project_no: '26-101',
+      contact_name: 'Dana Board', contact_email: 'board@dome.com',
+      proposal_fee: 48000, options_nte: null, rate: null, rate_unit: null,
+      term_months: null, ca_fee: null, billed_to_date: null, fee_source: null,
+      amount: null, stage: 'Proposal Sent', priority: 'HIGH',
+      proposal_sent_date: daysAgo(30), last_contact_date: daysAgo(20),
+      next_action: 'Follow up on proposal', next_action_due: today(),
+      keywords: ['dome'], dropbox_folder: '/Proposals/Dome', evidence: null,
+    },
+    {
+      id: 2, name: 'Terrazas Facade', client: 'Terrazas HOA', project_no: '26-102',
+      contact_name: 'Pat Manager', contact_email: 'pm@terrazas.com',
+      proposal_fee: 120000, options_nte: null, rate: null, rate_unit: null,
+      term_months: null, ca_fee: null, billed_to_date: null, fee_source: null,
+      amount: null, stage: 'Lead', priority: 'MEDIUM',
+      proposal_sent_date: null, last_contact_date: daysAgo(2),
+      next_action: null, next_action_due: null,
+      keywords: ['terrazas'], dropbox_folder: null, evidence: null,
+    },
+    {
+      id: 3, name: 'North Bay Villas', client: 'NBV Assn', project_no: '26-103',
+      contact_name: 'Lee Prez', contact_email: 'prez@nbv.com',
+      proposal_fee: 50000, options_nte: null, rate: 1500, rate_unit: 'month',
+      term_months: 10, ca_fee: null, billed_to_date: null, fee_source: null,
+      amount: null, stage: 'Won-Pending Payment', priority: 'LOW',
+      proposal_sent_date: daysAgo(60), last_contact_date: daysAgo(5),
+      next_action: 'Invoice', next_action_due: null,
+      keywords: ['north bay'], dropbox_folder: null, evidence: null,
+    },
+  ];
+}
+
+// Stub the whole backend. Returns {captured, state} for assertions.
+async function stubBackend(page) {
+  const state = { deals: fixtureDeals(), activities: [], nextId: 100 };
+  const captured = [];
+  const json = (route, body, status = 200) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+
+  await page.route('**/*.supabase.co/**', (route) => {
+    const req = route.request();
+    const url = new URL(req.url());
+    const method = req.method();
+    let body = null;
+    try { body = req.postData() ? JSON.parse(req.postData()) : null; } catch (e) {}
+    if (method !== 'GET') captured.push({ method, path: url.pathname + url.search, body });
+
+    if (url.pathname.startsWith('/auth/v1/user')) return json(route, { email: 'test@plaza.test' });
+    if (url.pathname.startsWith('/auth/v1/token'))
+      return json(route, { access_token: 'fake-token-2', refresh_token: 'r2', expires_in: 3600 });
+    if (url.pathname.startsWith('/functions/v1/graph-mail')) return json(route, []);
+    if (url.pathname.startsWith('/functions/v1/dropbox-files')) {
+      if (body?.action === 'list') {
+        return json(route, { files: [
+          { name: 'Dome Proposal Rev2.pdf', path: '/Proposals/Dome/Dome Proposal Rev2.pdf',
+            is_folder: false, size: 482000, modified: new Date().toISOString(), is_pdf: true },
+          { name: 'Site Photos', path: '/Proposals/Dome/Site Photos',
+            is_folder: true, size: null, modified: null, is_pdf: false },
+        ] });
+      }
+      if (body?.action === 'link') return json(route, { url: 'https://dl.example.test/fake' });
+      if (body?.action === 'value') {
+        return json(route, { file: 'Dome Proposal Rev2.pdf', candidates: [
+          { amount: 52500, context: 'Total lump sum fee for the scope described herein: $52,500.00', score: 4 },
+          { amount: 1500, context: 'permit allowance of $1,500', score: -1 },
+        ] });
+      }
+      if (body?.action === 'link') return json(route, { url: 'https://dl.example.test/fake' });
+      return json(route, { error: 'unknown action' }, 400);
+    }
+
+    // reads come from the deals_value view, writes go to the deals table
+    if (url.pathname.startsWith('/rest/v1/deals')) {
+      const idMatch = url.search.match(/id=eq\.(\d+)/);
+      if (method === 'GET') return json(route, state.deals);
+      if (method === 'POST') {
+        const row = { ...body, id: state.nextId++ };
+        state.deals.push(row);
+        return json(route, [row], 201);
+      }
+      if (method === 'PATCH' && idMatch) {
+        const d = state.deals.find((x) => x.id === +idMatch[1]);
+        if (d) Object.assign(d, body);
+        return json(route, d ? [d] : []);
+      }
+    }
+    if (url.pathname.startsWith('/rest/v1/activities')) {
+      if (method === 'GET') {
+        const m = url.search.match(/deal_id=eq\.(\d+)/);
+        return json(route, state.activities.filter((a) => !m || a.deal_id === +m[1]));
+      }
+      if (method === 'POST') {
+        const row = { ...body, id: state.nextId++, occurred_at: new Date().toISOString() };
+        state.activities.push(row);
+        return json(route, [row], 201);
+      }
+    }
+    return json(route, []);
+  });
+  return { captured, state };
+}
+
+// Boot the CRM with a valid stored session. Returns collected pageerrors.
+async function bootCrm(page, { viewport } = {}) {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  if (viewport) await page.setViewportSize(viewport);
+  await page.addInitScript(() => {
+    localStorage.setItem('plaza_crm_session', JSON.stringify({
+      access_token: 'fake-token', refresh_token: 'r1',
+      expires_at: Date.now() + 3600 * 1000,
+    }));
+  });
+  await page.goto('/index.html');
+  await page.waitForSelector('#app', { state: 'visible', timeout: 15_000 });
+  await page.waitForSelector('.board .card', { timeout: 15_000 });
+  return errors;
+}
+
+module.exports = { stubBackend, bootCrm, fixtureDeals };

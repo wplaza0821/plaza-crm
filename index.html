@@ -434,6 +434,26 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
   .drawer{padding-right:env(safe-area-inset-right)}
   .lbox{margin-bottom:env(safe-area-inset-bottom)}
 }
+
+/* ---------- deal create/edit form (drawer) ---------- */
+.fg{display:grid;grid-template-columns:1fr 1fr;gap:2px 12px}
+.fg .full{grid-column:1/-1}
+.fg .lb{margin-top:9px}
+.fg input,.fg select,.fg textarea{width:100%}
+
+/* ---------- drag-and-drop pipeline (HubSpot-style) ---------- */
+.card[draggable="true"]{cursor:grab}
+.card.dragging{opacity:.45;cursor:grabbing}
+.col.dropover{outline:2px dashed var(--accent);outline-offset:-2px}
+.col.dropover .col-b{background:var(--accent-bg)}
+
+/* ---------- toast ---------- */
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);
+  background:var(--black);color:#FFFFFF;padding:10px 18px;border-radius:var(--radius);
+  font-size:13px;box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;
+  transition:opacity .18s,transform .18s;z-index:1200;max-width:88vw}
+#toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.err{background:var(--red)}
 </style>
 </head>
 <body>
@@ -522,6 +542,7 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
 const SB_URL='https://zhxwkntrndaeqtkmbtsh.supabase.co';
 const SB_KEY='sb_publishable_FU92Md7Bi2WojPfUqtKCGw_7pG7Ul6s';
 const FN=SB_URL+'/functions/v1/graph-mail';
+const FN_DBX=SB_URL+'/functions/v1/dropbox-files';
 const LS='plaza_crm_session';
 let SESSION=null, DEALS=[], CUR=null, TAB='emails', VIEW='pipeline';
 /* Email thread: show only correspondence the CLIENT is actually a participant in.
@@ -622,6 +643,15 @@ async function fn(payload){
   if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
   return d;
 }
+async function fnD(payload){
+  const t=await tok();
+  const r=await fetch(FN_DBX,{method:'POST',
+    headers:{'apikey':SB_KEY,'Authorization':'Bearer '+t,'Content-Type':'application/json'},
+    body:JSON.stringify(payload)});
+  const d=await r.json();
+  if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
+  return d;
+}
 async function boot(){
   document.getElementById('login').style.display='none';
   document.getElementById('recover').style.display='none';
@@ -713,7 +743,11 @@ function kpis(){
 }
 function toolbar(){
   const b=document.getElementById('bar');
-  if(VIEW==='forecast'||VIEW==='contacts'){b.innerHTML='';return;}
+  if(VIEW==='forecast'||VIEW==='contacts'){
+    b.innerHTML=`<button class="pri" id="ndBtn" style="margin-left:auto">&#65291; New deal</button>`;
+    b.querySelector('#ndBtn').onclick=openNew;
+    return;
+  }
   b.innerHTML=`
     <div class="seg">
       <button data-mode="pipeline" class="${VIEW==='pipeline'?'on':''}">Board</button>
@@ -721,11 +755,20 @@ function toolbar(){
     </div>
     <select id="fs"><option value="">All stages</option>${STAGES.map(s=>`<option${s===FSTAGE?' selected':''}>${s}</option>`).join('')}</select>
     <select id="fp"><option value="">All priorities</option>${['HIGH','MEDIUM','LOW'].map(s=>`<option${s===FPRI?' selected':''}>${s}</option>`).join('')}</select>
-    <span style="font-size:12px;color:var(--gray-400)" id="cntlbl"></span>`;
+    <span style="font-size:12px;color:var(--gray-400)" id="cntlbl"></span>
+    <button class="pri" id="ndBtn" style="margin-left:auto">&#65291; New deal</button>`;
   b.querySelectorAll('.seg button').forEach(x=>x.onclick=()=>{VIEW=x.dataset.mode;paint();});
   const fs=document.getElementById('fs'), fp=document.getElementById('fp');
   if(fs) fs.onchange=e=>{FSTAGE=e.target.value;renderView();};
   if(fp) fp.onchange=e=>{FPRI=e.target.value;renderView();};
+  b.querySelector('#ndBtn').onclick=openNew;
+}
+/* Bottom-center toast; replaces silent failures on background writes. */
+function toast(msg,isErr){
+  let t=document.getElementById('toast');
+  if(!t){t=document.createElement('div');t.id='toast';document.body.appendChild(t);}
+  t.textContent=msg;t.classList.toggle('err',!!isErr);t.classList.add('on');
+  clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),2600);
 }
 function rows(){
   const q=(document.getElementById('q').value||'').toLowerCase();
@@ -755,7 +798,7 @@ function board(v,r){
     const sub=r.filter(d=>d.stage===st)
       .sort((a,b)=>(pr[a.priority]-pr[b.priority])||((b.days_since_contact||0)-(a.days_since_contact||0)));
     const val=sub.reduce((a,b)=>a+dealValue(b),0);
-    h+=`<div class="col"><div class="col-h">
+    h+=`<div class="col" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropDeal(event,'${esc(st)}')"><div class="col-h">
         <div class="t">${esc(st)}<span class="n">${sub.length}</span></div>
         <div class="v">${money(val)||'—'}</div></div><div class="col-b">`;
     h+= sub.length? sub.map(d=>cardHTML(d)).join('') : '<div class="empty" style="padding:14px 4px;font-size:12px">Empty</div>';
@@ -764,11 +807,15 @@ function board(v,r){
   v.innerHTML=h+'</div>';
 }
 function cardHTML(d){
-  return `<div class="card p${esc(d.priority)} ${CUR&&CUR.id===d.id?'sel':''}" onclick="open_(${d.id})">
+  /* card figure uses dealValue() so a card never disagrees with the column
+     total it sits under (legacy `amount` is dealValue's fallback anyway). */
+  const dv=dealValue(d);
+  return `<div class="card p${esc(d.priority)} ${CUR&&CUR.id===d.id?'sel':''}" onclick="open_(${d.id})"
+    draggable="true" ondragstart="dragDeal(event,${d.id})" ondragend="dragEnd(event)">
     <div class="cn">${esc(d.name)}</div>
     <div class="cc">${esc(d.client||'')}</div>
     <div class="cf">
-      ${d.amount?`<span class="amt">${money(d.amount)}</span>`:''}
+      ${dv?`<span class="amt">${money(dv)}</span>`:''}
       ${d.project_no?`<span class="pill pn">${esc(d.project_no)}</span>`:''}
       <span class="pill ${esc(d.priority)}">${esc(d.priority)}</span>
       ${d.days_since_contact!=null?`<span class="pill ${d.overdue?'od':'ok'}">${d.days_since_contact}d</span>`:''}
@@ -914,11 +961,15 @@ function draw(){
       <div class="tab ${TAB==='emails'?'on':''}" onclick="setTab('emails')">Email thread</div>
       <div class="tab ${TAB==='compose'?'on':''}" onclick="setTab('compose')">Compose follow-up</div>
       <div class="tab ${TAB==='acts'?'on':''}" onclick="setTab('acts')">Activity log</div>
+      <div class="tab ${TAB==='files'?'on':''}" onclick="setTab('files')">Files</div>
+      <div class="tab ${TAB==='edit'?'on':''}" onclick="setTab('edit')">Edit</div>
     </div><div id="tabbody"><div class="empty">Loading...</div></div>
   </div>`;
   if(TAB==='emails')loadEmails();
   if(TAB==='compose')loadCompose();
   if(TAB==='acts')loadActs();
+  if(TAB==='files')loadFiles();
+  if(TAB==='edit')loadEdit();
 }
 function setTab(t){TAB=t;draw();}
 /* Toggle the client-participant gate on the email thread and re-query. */
@@ -942,6 +993,215 @@ async function saveStage(){
     const s2=document.getElementById('sst'); if(s2) s2.textContent='Saved';
   }catch(e){st.innerHTML='<span class="err">'+esc(e.message)+'</span>';}
 }
+
+/* ---------------- drag-and-drop stage moves (HubSpot-style board) ---------------- */
+let DRAG_ID=null;
+function dragDeal(e,id){
+  DRAG_ID=id;
+  e.dataTransfer.effectAllowed='move';
+  try{e.dataTransfer.setData('text/plain',String(id));}catch(_){/* old Safari */}
+  e.target.classList.add('dragging');
+}
+function dragEnd(e){
+  e.target.classList.remove('dragging');
+  document.querySelectorAll('.col.dropover').forEach(c=>c.classList.remove('dropover'));
+}
+function dragOver(e){e.preventDefault();e.dataTransfer.dropEffect='move';e.currentTarget.classList.add('dropover');}
+function dragLeave(e){if(!e.currentTarget.contains(e.relatedTarget))e.currentTarget.classList.remove('dropover');}
+async function dropDeal(e,stage){
+  e.preventDefault();
+  e.currentTarget.classList.remove('dropover');
+  const id=DRAG_ID!=null?DRAG_ID:+(e.dataTransfer.getData('text/plain')||0);
+  DRAG_ID=null;
+  const d=DEALS.find(x=>x.id===id);
+  if(!d||d.stage===stage)return;
+  const prev=d.stage;
+  /* optimistic: move the card immediately, revert if the write fails */
+  d.stage=stage; d.is_open=OPEN.includes(stage);
+  paint();
+  try{
+    await api('deals?id=eq.'+id,{method:'PATCH',body:JSON.stringify({stage})});
+    try{
+      await api('activities',{method:'POST',
+        body:JSON.stringify({deal_id:id,kind:'stage_change',summary:`${prev} -> ${stage}`})});
+    }catch(_){/* audit-log failure must never mask a successful stage change */}
+    toast(`${d.name}: ${prev} → ${stage}`);
+    await load();
+  }catch(err){
+    d.stage=prev; d.is_open=OPEN.includes(prev);
+    paint();
+    toast('Stage change failed: '+err.message,true);
+  }
+}
+
+/* ---------------- deal create / edit ----------------
+   Money lives in the Deal economics block (saveEconomics) — the only writer of
+   proposal_fee/options_nte/rate/term/ca_fee. This form deliberately carries NO
+   money fields for existing deals so the two surfaces can never disagree; a new
+   deal may capture a proposal fee up front since the economics block only
+   exists once the record does. */
+const DEAL_FIELDS=[
+  /* [id, label, key, type, full-width] */
+  ['dfName','Deal name *','name','text',1],
+  ['dfClient','Client','client','text',0],
+  ['dfProj','Project #','project_no','text',0],
+  ['dfCName','Contact name','contact_name','text',0],
+  ['dfCEmail','Contact email','contact_email','email',0],
+  ['dfPSent','Proposal sent','proposal_sent_date','date',0],
+  ['dfLast','Last contact','last_contact_date','date',0],
+  ['dfNAct','Next action','next_action','text',1],
+  ['dfNDue','Next action due','next_action_due','date',0],
+  ['dfKw','Email keywords (comma-separated)','keywords','text',0],
+  ['dfDbx','Dropbox folder','dropbox_folder','text',1],
+  ['dfEv','Evidence / notes','evidence','textarea',1],
+];
+function dealFormHTML(d,isNew){
+  let h='<div class="fg">';
+  h+=`<div><label class="lb">Stage</label><select id="dfStage">${STAGES.map(s=>`<option${s===(d.stage||'Lead')?' selected':''}>${s}</option>`).join('')}</select></div>`;
+  h+=`<div><label class="lb">Priority</label><select id="dfPri">${['HIGH','MEDIUM','LOW'].map(s=>`<option${s===(d.priority||'MEDIUM')?' selected':''}>${s}</option>`).join('')}</select></div>`;
+  if(isNew) h+=`<div><label class="lb">Proposal fee ($)</label><input id="dfFee" type="number" step="100" placeholder="editable later"></div>`;
+  for(const [id,lbl,key,type,full] of DEAL_FIELDS){
+    const val=key==='keywords'?(Array.isArray(d.keywords)?d.keywords.join(', '):''):(d[key]==null?'':d[key]);
+    h+=`<div${full?' class="full"':''}><label class="lb">${lbl}</label>`;
+    h+= type==='textarea'
+      ? `<textarea id="${id}" style="min-height:64px">${esc(val)}</textarea>`
+      : `<input id="${id}" type="${type}" value="${esc(val)}">`;
+    h+='</div>';
+  }
+  return h+'</div>';
+}
+function readDealForm(isNew){
+  const g=id=>document.getElementById(id).value.trim();
+  const or=v=>v===''?null:v;
+  const kws=g('dfKw').split(',').map(s=>s.trim()).filter(Boolean);
+  const body={
+    name:g('dfName'), client:or(g('dfClient')), project_no:or(g('dfProj')),
+    contact_name:or(g('dfCName')), contact_email:or(g('dfCEmail')),
+    stage:g('dfStage'), priority:g('dfPri'),
+    proposal_sent_date:or(g('dfPSent')), last_contact_date:or(g('dfLast')),
+    next_action:or(g('dfNAct')), next_action_due:or(g('dfNDue')),
+    keywords:kws.length?kws:null, dropbox_folder:or(g('dfDbx')), evidence:or(g('dfEv')),
+  };
+  if(isNew){const f=g('dfFee'); if(f!=='') body.proposal_fee=+f;}
+  return body;
+}
+function openNew(){
+  CUR=null; renderView();
+  document.getElementById('drawer').innerHTML=`
+  <div class="dh">
+    <button class="x" onclick="closeDrawer()">&times;</button>
+    <h2>New deal</h2>
+    <div class="meta">Create a pipeline record</div>
+  </div>
+  <div class="db">
+    ${dealFormHTML({},true)}
+    <div class="fl"><button class="pri" onclick="saveDealForm(null)">Create deal</button><span id="dfst"></span></div>
+  </div>`;
+  document.getElementById('scrim').classList.add('on');
+  document.getElementById('drawer').classList.add('on');
+}
+async function saveDealForm(id){
+  const st=document.getElementById('dfst');
+  const body=readDealForm(id==null);
+  if(!body.name){st.innerHTML='<span class="err">Deal name is required</span>';return;}
+  st.textContent='Saving...';
+  try{
+    let rowId=id;
+    if(id==null){
+      const res=await api('deals',{method:'POST',body:JSON.stringify(body)});
+      const row=Array.isArray(res)?res[0]:res;
+      rowId=row&&row.id;
+      try{
+        await api('activities',{method:'POST',
+          body:JSON.stringify({deal_id:rowId,kind:'created',summary:`Deal created in ${body.stage}`})});
+      }catch(_){/* audit-log failure must never mask a successful create */}
+      toast('Deal created');
+    }else{
+      await api('deals?id=eq.'+id,{method:'PATCH',body:JSON.stringify(body)});
+      toast('Deal updated');
+    }
+    await load();
+    CUR=DEALS.find(x=>x.id===rowId)||null;
+    if(CUR){TAB='edit';draw();}else closeDrawer();
+  }catch(e){st.innerHTML='<span class="err">'+esc(e.message)+'</span>';}
+}
+function loadEdit(){
+  document.getElementById('tabbody').innerHTML=
+    dealFormHTML(CUR,false)+
+    `<div class="fl"><button class="pri" onclick="saveDealForm(${CUR.id})">Save changes</button><span id="dfst"></span></div>
+     <div style="margin-top:8px;font-size:11.5px;color:var(--gray-400)">Fees live in the Deal economics block above.</div>`;
+}
+
+/* ---------------- Dropbox files + proposal fee scan ---------------- */
+async function loadFiles(){
+  const b=document.getElementById('tabbody');
+  if(!CUR.dropbox_folder){
+    b.innerHTML=`<div class="empty">No Dropbox folder linked to this deal.<br>
+      <span style="font-size:12px">Set one in the <a href="#" onclick="setTab('edit');return false" style="color:var(--accent)">Edit</a> tab
+      (e.g. <code>/Proposals/${esc(CUR.client||'Client')}</code>) to browse proposals here.</span></div>`;
+    return;
+  }
+  b.innerHTML='<div class="empty">Reading Dropbox folder...</div>';
+  try{
+    const d=await fnD({action:'list',path:CUR.dropbox_folder});
+    const fs=d.files||[];
+    if(!fs.length){b.innerHTML='<div class="empty">Folder is empty.</div>';return;}
+    b.innerHTML=`<div style="font-size:11.5px;color:var(--gray-400);margin-bottom:9px">${esc(CUR.dropbox_folder)} &middot; ${fs.length} item${fs.length>1?'s':''}</div>`
+      +fs.map((f,i)=>`<div class="act" style="display:flex;align-items:center;gap:10px">
+        <span style="flex:0 0 18px;text-align:center">${f.is_folder?'&#128193;':(f.is_pdf?'&#128196;':'&#128441;')}</span>
+        <div style="flex:1;min-width:0">
+          <div class="nm" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name)}</div>
+          <div style="font-size:11px;color:var(--gray-400)">${f.modified?esc(relTime(f.modified)):''}${f.size?` &middot; ${fsize(f.size)}`:''}</div>
+        </div>
+        ${f.is_folder?'':`<button class="sm" onclick="openFile(${i})">Open</button>`}
+        ${f.is_pdf?`<button class="sm" onclick="scanValue(${i})">Scan for fee</button>`:''}
+      </div>`).join('')
+      +`<div id="scanout"></div>`;
+    window._DBXFILES=fs;
+  }catch(e){
+    b.innerHTML=`<div class="empty"><span class="err">${esc(e.message)}</span><br>
+      <span style="font-size:12px;color:var(--gray-400)">Is the dropbox-files function deployed with Dropbox credentials?</span></div>`;
+  }
+}
+async function openFile(i){
+  const f=window._DBXFILES[i];
+  try{
+    const d=await fnD({action:'link',path:f.path});
+    window.open(d.url,'_blank','noopener');
+  }catch(e){toast('Could not open file: '+e.message,true);}
+}
+async function scanValue(i){
+  const f=window._DBXFILES[i];
+  const out=document.getElementById('scanout');
+  out.innerHTML='<div class="empty">Extracting text and scanning for amounts...</div>';
+  try{
+    const d=await fnD({action:'value',path:f.path});
+    const cs=d.candidates||[];
+    if(!cs.length){out.innerHTML='<div class="empty">No dollar amounts found in this PDF.</div>';return;}
+    out.innerHTML=`<div style="margin-top:12px"><label class="lb">Amounts found in ${esc(d.file)}</label>`
+      +cs.map(c=>`<div class="act" style="display:flex;align-items:center;gap:10px">
+        <b style="flex:0 0 auto;font-variant-numeric:tabular-nums">${money(c.amount)}</b>
+        <div style="flex:1;min-width:0;font-size:11.5px;color:var(--gray-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(c.context)}">${esc(c.context)}</div>
+        <button class="sm pri" onclick="applyValue(${c.amount},'${esc(d.file).replace(/'/g,'&#39;')}')">Use as proposal fee</button>
+      </div>`).join('')+'</div>';
+  }catch(e){out.innerHTML=`<div class="empty"><span class="err">${esc(e.message)}</span></div>`;}
+}
+/* A scanned proposal amount is the PROPOSAL FEE in the economics model — not a
+   separate scalar. fee_source records which PDF it came from, matching the
+   "parsed from:" line the drawer already renders. */
+async function applyValue(amount,file){
+  try{
+    await api('deals?id=eq.'+CUR.id,{method:'PATCH',
+      body:JSON.stringify({proposal_fee:amount,fee_source:file,fee_verified_at:new Date().toISOString()})});
+    try{
+      await api('activities',{method:'POST',
+        body:JSON.stringify({deal_id:CUR.id,kind:'note',summary:`Proposal fee set to ${money(amount)} from ${file}`})});
+    }catch(_){/* audit-log failure must never mask the fee write */}
+    toast('Proposal fee set to '+money(amount));
+    await load();CUR=DEALS.find(x=>x.id===CUR.id);draw();
+  }catch(e){toast('Could not set fee: '+e.message,true);}
+}
+
 /* Manual override of deal economics. Empty input -> NULL, not 0, so "unknown"
    stays distinguishable from "zero" (an unknown term must keep contributing
    nothing to the pipeline rather than looking like a real $0 deal).
@@ -1146,17 +1406,39 @@ async function doCompose(){
 async function loadActs(){
   const b=document.getElementById('tabbody');
   const as=await api(`activities?deal_id=eq.${CUR.id}&select=*&order=occurred_at.desc&limit=60`);
-  b.innerHTML=`<div style="margin-bottom:14px"><label class="lb">Add note</label>
-    <textarea id="nb" style="min-height:70px"></textarea>
-    <div class="fl"><button onclick="addNote()">Save note</button><span id="nst"></span></div></div>`
+  b.innerHTML=`<div style="margin-bottom:14px">
+    <div class="fl" style="margin-top:0;margin-bottom:7px">
+      <select id="nk" style="width:auto">
+        <option value="note">Note</option>
+        <option value="call">Call</option>
+        <option value="meeting">Meeting</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--gray-500);margin-left:auto;cursor:pointer">
+        <input type="checkbox" id="nlc" style="width:auto;margin:0"> counts as client contact</label>
+    </div>
+    <textarea id="nb" style="min-height:70px" placeholder="Log a note, call, or meeting..."></textarea>
+    <div class="fl"><button onclick="addNote()">Log activity</button><span id="nst"></span></div></div>`
    +(as.length?as.map(a=>`<div class="act"><div class="ak">${esc(a.kind)}</div>
      <div class="at">${esc((a.occurred_at||'').replace('T',' ').slice(0,16))}</div>
      <div class="note">${esc(a.summary)}</div></div>`).join(''):'<div class="empty">No activity yet.</div>');
+  /* calls + meetings ARE client contact; default the bump on for those kinds */
+  const nk=document.getElementById('nk'), nlc=document.getElementById('nlc');
+  nk.onchange=()=>{nlc.checked=nk.value!=='note';};
 }
 async function addNote(){
   const note=document.getElementById('nb').value.trim();if(!note)return;
-  await api('activities',{method:'POST',body:JSON.stringify({deal_id:CUR.id,kind:'note',summary:note})});
-  loadActs();
+  const kind=document.getElementById('nk').value;
+  const bump=document.getElementById('nlc').checked;
+  const st=document.getElementById('nst');st.textContent='Saving...';
+  try{
+    await api('activities',{method:'POST',body:JSON.stringify({deal_id:CUR.id,kind,summary:note})});
+    if(bump){
+      await api('deals?id=eq.'+CUR.id,{method:'PATCH',
+        body:JSON.stringify({last_contact_date:new Date().toISOString().slice(0,10)})});
+      await load();CUR=DEALS.find(x=>x.id===CUR.id);
+    }
+    loadActs();
+  }catch(e){st.innerHTML='<span class="err">'+esc(e.message)+'</span>';}
 }
 document.getElementById('q').oninput=renderView;
 /* nav: sidebar is an off-canvas drawer on phones, always-visible on desktop */
