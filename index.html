@@ -202,6 +202,19 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
   padding:9px 0;border-bottom:1px solid var(--gray-100);font-weight:600}
 .grid2 .v{font-size:13px;padding:9px 0;border-bottom:1px solid var(--gray-100);min-width:0;
   word-break:break-word}
+/* Manual deal-economics editor (record drawer). Inputs are 16px because iOS
+   Safari auto-zooms the whole page on focus below that — the documented CRM
+   pitfall. Verify with getComputedStyle, not by reading the CSS. */
+.fee-edit{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));
+  gap:9px;margin-top:10px}
+.fee-edit label{display:flex;flex-direction:column;gap:3px;font-size:11px;
+  font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:.03em}
+.fee-edit input,.fee-edit select{font-size:16px;padding:7px 9px;
+  border:1px solid var(--border);border-radius:5px;background:var(--panel);
+  color:var(--ink);min-height:38px;width:100%;box-sizing:border-box}
+.fee-edit input:focus,.fee-edit select:focus{outline:2px solid var(--accent);
+  outline-offset:-1px}
+@media(max-width:430px){.fee-edit{grid-template-columns:1fr 1fr}}
 .callout{border-radius:var(--radius);padding:11px 13px;margin:14px 0;font-size:12.5px;
   line-height:1.55}
 .callout.na{background:var(--accent-bg);border:1px solid #d3e2e8;color:#174d63}
@@ -628,21 +641,23 @@ async function boot(){
    unknown duration can never silently inflate the pipeline. Falls back to the
    legacy `amount` column only when the new fields are absent. */
 function dealValue(d){
-  const fee=+d.proposal_fee||0, nte=+d.options_nte||0;
+  const fee=+d.proposal_fee||0, nte=+d.options_nte||0, ca=+d.ca_fee||0;
   const rate=+d.rate||0, term=+d.term_months||0;
   const rec=(d.rate_unit==='month'&&rate&&term)?rate*term:0;
-  const v=fee+nte+rec;
+  const v=fee+nte+ca+rec;
   return v||(+d.amount||0);
 }
 function valueNote(d){
   const bits=[];
   if(+d.proposal_fee) bits.push(money(+d.proposal_fee)+' fee');
   if(+d.options_nte) bits.push(money(+d.options_nte)+' options');
+  if(+d.ca_fee) bits.push(money(+d.ca_fee)+' CA');
   if(+d.rate&&d.rate_unit==='month'){
     bits.push(money(+d.rate)+'/mo'+(d.term_months?' x'+d.term_months+'mo':' (term TBD)'));
   }
   if(+d.rate&&d.rate_unit==='project') bits.push(money(+d.rate)+'/project');
-  if((d.fee_flags||[]).includes('hourly')) bits.push('+ hourly CA');
+  if(+d.rate&&d.rate_unit==='letter') bits.push(money(+d.rate)+'/letter');
+  if(!+d.ca_fee&&(d.fee_flags||[]).includes('hourly')) bits.push('+ hourly CA');
   return bits.join(' · ');
 }
 async function load(){
@@ -861,10 +876,38 @@ function draw(){
     ${d.next_action?`<div class="callout na"><b>Next step</b><br>${esc(d.next_action)}${d.next_action_due?` &middot; <b>due ${esc(d.next_action_due)}</b>`:''}</div>`:''}
     <div class="grid2">
       <div class="k">Contact</div><div class="v">${esc(d.contact_name||'—')}${d.contact_email?`<br><a href="mailto:${esc(d.contact_email)}">${esc(d.contact_email)}</a>`:''}</div>
-      <div class="k">Amount</div><div class="v">${money(d.amount)||'TBD'}${d.value_note?` <span style="color:var(--gray-400);font-size:12px">· ${esc(d.value_note)}</span>`:''}</div>
+      <div class="k">Contract value</div><div class="v"><b>${money(dealValue(d))||'TBD'}</b>${valueNote(d)?` <span style="color:var(--gray-400);font-size:12px">· ${esc(valueNote(d))}</span>`:''}${d.term_unknown?` <span class="err" style="font-size:11.5px">· term not set, recurring excluded</span>`:''}</div>
       <div class="k">Proposal sent</div><div class="v">${esc(d.proposal_sent_date||'—')}${d.days_since_proposal!=null?` <span class="at">(${d.days_since_proposal}d ago)</span>`:''}</div>
       <div class="k">Last contact</div><div class="v">${esc(d.last_contact_date||'—')}${d.days_since_contact!=null?` <span class="${d.overdue?'err':'at'}">(${d.days_since_contact}d ago)</span>`:''}</div>
       ${d.dropbox_folder?`<div class="k">Dropbox</div><div class="v" style="font-size:11.5px;color:var(--gray-500)">${esc(d.dropbox_folder)}</div>`:''}
+    </div>
+    <!-- Manual money editor: William edits term + CA/hourly fee where the
+         proposal does not state them. Everything here is a deliberate human
+         override of parsed values, so each field shows what was parsed. -->
+    <div class="callout" style="background:var(--panel2);border-left:3px solid var(--accent)">
+      <b>Deal economics</b> <span style="color:var(--gray-400);font-size:11.5px">— editable; blank = not applicable</span>
+      <div class="fee-edit">
+        <label>Proposal fee $<input id="edFee" type="number" step="100" value="${d.proposal_fee??''}" placeholder="one-time"></label>
+        <label>Options / NTE $<input id="edNte" type="number" step="100" value="${d.options_nte??''}" placeholder="electives"></label>
+        <label>Recurring rate $<input id="edRate" type="number" step="100" value="${d.rate??''}" placeholder="per unit"></label>
+        <label>Rate unit
+          <select id="edUnit">
+            <option value=""${!d.rate_unit?' selected':''}>—</option>
+            <option value="month"${d.rate_unit==='month'?' selected':''}>per month</option>
+            <option value="project"${d.rate_unit==='project'?' selected':''}>per project</option>
+            <option value="letter"${d.rate_unit==='letter'?' selected':''}>per letter</option>
+          </select></label>
+        <label>Term (months)<input id="edTerm" type="number" step="1" min="0" value="${d.term_months??''}" placeholder="e.g. 14"></label>
+        <label>CA / hourly fee $<input id="edCa" type="number" step="100" value="${d.ca_fee??''}" placeholder="if applicable"></label>
+        <label>Billed to date $<input id="edBilled" type="number" step="100" value="${d.billed_to_date??''}" placeholder="from QB"></label>
+      </div>
+      <div style="margin-top:9px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="pri sm" onclick="saveEconomics()">Save economics</button>
+        <span id="fst"></span>
+        <span style="color:var(--gray-400);font-size:11.5px">Contract value = fee + options + (rate × term) + CA</span>
+      </div>
+      ${d.fee_source?`<div style="margin-top:7px;font-size:11px;color:var(--gray-500)">parsed from: ${esc(d.fee_source)}</div>`:''}
+      ${(d.fee_flags||[]).length?`<div style="margin-top:4px">${(d.fee_flags||[]).map(f=>`<span class="chip">${esc(f)}</span>`).join(' ')}</div>`:''}
     </div>
     ${d.evidence?`<div class="callout ev"><b>Evidence</b><br>${esc(d.evidence)}</div>`:''}
     <div class="tabs">
@@ -897,6 +940,44 @@ async function saveStage(){
     }
     await load(); CUR=DEALS.find(x=>x.id===CUR.id); draw();
     const s2=document.getElementById('sst'); if(s2) s2.textContent='Saved';
+  }catch(e){st.innerHTML='<span class="err">'+esc(e.message)+'</span>';}
+}
+/* Manual override of deal economics. Empty input -> NULL, not 0, so "unknown"
+   stays distinguishable from "zero" (an unknown term must keep contributing
+   nothing to the pipeline rather than looking like a real $0 deal).
+   Writes the deal first, then the audit activity, per the ordering lesson in
+   saveStage(). */
+async function saveEconomics(){
+  const st=document.getElementById('fst'); st.textContent='Saving...';
+  const num=id=>{const v=document.getElementById(id).value.trim(); return v===''?null:(+v);};
+  const unit=document.getElementById('edUnit').value||null;
+  const body={
+    proposal_fee:num('edFee'), options_nte:num('edNte'),
+    rate:num('edRate'), rate_unit:unit, term_months:num('edTerm'),
+    ca_fee:num('edCa'), billed_to_date:num('edBilled'),
+    fee_verified_at:new Date().toISOString()
+  };
+  if(body.rate!=null && !body.rate_unit){
+    st.innerHTML='<span class="err">Pick a rate unit for a recurring rate</span>'; return;
+  }
+  if(body.term_months!=null && body.rate==null){
+    st.innerHTML='<span class="err">Term needs a recurring rate</span>'; return;
+  }
+  try{
+    await api('deals?id=eq.'+CUR.id,{method:'PATCH',body:JSON.stringify(body)});
+    try{
+      const parts=[];
+      if(body.proposal_fee!=null)parts.push('fee '+money(body.proposal_fee));
+      if(body.options_nte!=null)parts.push('options '+money(body.options_nte));
+      if(body.rate!=null)parts.push('rate '+money(body.rate)+'/'+body.rate_unit);
+      if(body.term_months!=null)parts.push('term '+body.term_months+'mo');
+      if(body.ca_fee!=null)parts.push('CA '+money(body.ca_fee));
+      if(body.billed_to_date!=null)parts.push('billed '+money(body.billed_to_date));
+      await api('activities',{method:'POST',body:JSON.stringify(
+        {deal_id:CUR.id,kind:'note',summary:'Economics updated: '+(parts.join(' · ')||'cleared')})});
+    }catch(e){/* audit failure must not mask a successful save */}
+    await load(); CUR=DEALS.find(x=>x.id===CUR.id); draw();
+    const s2=document.getElementById('fst'); if(s2) s2.textContent='Saved';
   }catch(e){st.innerHTML='<span class="err">'+esc(e.message)+'</span>';}
 }
 /* ---- email helpers ---- */
