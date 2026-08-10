@@ -620,33 +620,8 @@ async function boot(){
   }catch(e){}
   await load();
 }
-/* Contract value, HubSpot-style. A Plaza proposal is not one number:
-   proposal_fee = one-time $ from the proposal document
-   options_nte  = elective / not-to-exceed scope (William: include options)
-   rate*term    = recurring engagements (William: include expected term)
-   A monthly rate with NO stated term contributes 0 and is flagged, so an
-   unknown duration can never silently inflate the pipeline. Falls back to the
-   legacy `amount` column only when the new fields are absent. */
-function dealValue(d){
-  const fee=+d.proposal_fee||0, nte=+d.options_nte||0;
-  const rate=+d.rate||0, term=+d.term_months||0;
-  const rec=(d.rate_unit==='month'&&rate&&term)?rate*term:0;
-  const v=fee+nte+rec;
-  return v||(+d.amount||0);
-}
-function valueNote(d){
-  const bits=[];
-  if(+d.proposal_fee) bits.push(money(+d.proposal_fee)+' fee');
-  if(+d.options_nte) bits.push(money(+d.options_nte)+' options');
-  if(+d.rate&&d.rate_unit==='month'){
-    bits.push(money(+d.rate)+'/mo'+(d.term_months?' x'+d.term_months+'mo':' (term TBD)'));
-  }
-  if(+d.rate&&d.rate_unit==='project') bits.push(money(+d.rate)+'/project');
-  if((d.fee_flags||[]).includes('hourly')) bits.push('+ hourly CA');
-  return bits.join(' · ');
-}
 async function load(){
-  DEALS=await api('deals_value?select=*&order=project_no.asc.nullslast');
+  DEALS=await api('deals?select=*&order=project_no.asc.nullslast');
   DEALS.forEach(d=>{
     d.days_since_contact=days(d.last_contact_date);
     d.days_since_proposal=days(d.proposal_sent_date);
@@ -675,16 +650,11 @@ function paint(){
   kpis(); toolbar(); renderView();
 }
 function kpis(){
-  // Stage sets must be DISJOINT. Previously `stage.startsWith('Won')` also
-  // matched 'Won-Pending Payment', which is ALSO in OPEN and ALSO in A/R — so
-  // the same dollars were counted three times and adding the two headline KPIs
-  // double-counted them. Match against explicit lists instead of a prefix.
-  const WON_CLOSED=['Won'];
-  const open=DEALS.filter(d=>d.is_open), won=DEALS.filter(d=>WON_CLOSED.includes(d.stage));
+  const open=DEALS.filter(d=>d.is_open), won=DEALS.filter(d=>d.stage.startsWith('Won'));
   const od=open.filter(d=>d.overdue);
-  const openVal=open.reduce((a,b)=>a+dealValue(b),0);
-  const wonVal=won.reduce((a,b)=>a+dealValue(b),0);
-  const ar=DEALS.filter(d=>d.stage==='Won-Pending Payment').reduce((a,b)=>a+dealValue(b),0);
+  const openVal=open.reduce((a,b)=>a+(+b.amount||0),0);
+  const wonVal=won.reduce((a,b)=>a+(+b.amount||0),0);
+  const ar=DEALS.filter(d=>d.stage==='Won-Pending Payment').reduce((a,b)=>a+(+b.amount||0),0);
   document.getElementById('kpis').innerHTML=`
    <div class="kpi"><small>Open pipeline</small><b>${money(openVal)||'$0'}</b>
      <div class="sub">${open.length} active deals</div></div>
@@ -739,7 +709,7 @@ function board(v,r){
   for(const st of COLS){
     const sub=r.filter(d=>d.stage===st)
       .sort((a,b)=>(pr[a.priority]-pr[b.priority])||((b.days_since_contact||0)-(a.days_since_contact||0)));
-    const val=sub.reduce((a,b)=>a+dealValue(b),0);
+    const val=sub.reduce((a,b)=>a+(+b.amount||0),0);
     h+=`<div class="col"><div class="col-h">
         <div class="t">${esc(st)}<span class="n">${sub.length}</span></div>
         <div class="v">${money(val)||'—'}</div></div><div class="col-b">`;
@@ -801,7 +771,7 @@ function contacts(v){
   let h='<div class="tbl-wrap"><table><thead><tr><th>Contact</th><th>Client</th><th>Deals</th><th>Value</th></tr></thead><tbody>';
   if(!list.length) h+='<tr><td colspan="4"><div class="empty">No contacts match.</div></td></tr>';
   for(const c of list){
-    const val=c.deals.reduce((a,b)=>a+dealValue(b),0);
+    const val=c.deals.reduce((a,b)=>a+(+b.amount||0),0);
     h+=`<tr onclick="open_(${c.deals[0].id})">
       <td><div class="nm">${esc(c.name||'—')}</div><div class="cl">${esc(c.email)}</div></td>
       <td>${esc(c.client||'—')}</td>
@@ -813,11 +783,11 @@ function contacts(v){
 /* forecast view */
 function forecast(v){
   let h='<div class="tbl-wrap"><table><thead><tr><th>Stage</th><th>Deals</th><th>Value</th><th>Share of pipeline</th></tr></thead><tbody>';
-  const tot=DEALS.reduce((a,b)=>a+dealValue(b),0)||1;
+  const tot=DEALS.reduce((a,b)=>a+(+b.amount||0),0)||1;
   for(const st of COLS){
     const sub=DEALS.filter(d=>d.stage===st);
     if(!sub.length)continue;
-    const val=sub.reduce((a,b)=>a+dealValue(b),0);
+    const val=sub.reduce((a,b)=>a+(+b.amount||0),0);
     const pct=Math.round(val/tot*100);
     h+=`<tr><td><b>${esc(st)}</b></td><td class="num">${sub.length}</td>
       <td class="num">${money(val)||'—'}</td>
