@@ -692,6 +692,19 @@ function valueNote(d){
 }
 async function load(){
   DEALS=await api('deals_value?select=*&order=project_no.asc.nullslast');
+  /* Attach Dropbox document counts so the board/table can show a badge without
+     a per-card query. deal_primary_doc is a view over deal_documents (see
+     migrations/004_deal_documents.sql). Wrapped in try/catch: a missing view
+     must degrade to "no badge", never break the whole board. */
+  try{
+    const pd=await api('deal_primary_doc?select=deal_id,doc_count,signed_count,primary_name,primary_url&doc_count=gt.0');
+    const byId={};pd.forEach(x=>byId[x.deal_id]=x);
+    DEALS.forEach(d=>{const p=byId[d.id];
+      d.doc_count=p?p.doc_count:0;
+      d.doc_signed=p?p.signed_count:0;
+      d.doc_name=p?p.primary_name:null;
+      d.doc_url=p?p.primary_url:null;});
+  }catch(e){console.warn('doc counts unavailable',e.message);}
   DEALS.forEach(d=>{
     d.days_since_contact=days(d.last_contact_date);
     d.days_since_proposal=days(d.proposal_sent_date);
@@ -819,6 +832,7 @@ function cardHTML(d){
       ${d.project_no?`<span class="pill pn">${esc(d.project_no)}</span>`:''}
       <span class="pill ${esc(d.priority)}">${esc(d.priority)}</span>
       ${d.days_since_contact!=null?`<span class="pill ${d.overdue?'od':'ok'}">${d.days_since_contact}d</span>`:''}
+      ${d.doc_count?`<span class="pill" title="${esc(d.doc_name||'')}" style="background:${d.doc_signed?'#1f6581':'#e8eaed'};color:${d.doc_signed?'#fff':'#3c4043'}">📄 ${d.doc_count}${d.doc_signed?' ✓':''}</span>`:''}
     </div></div>`;
 }
 /* table view */
@@ -957,7 +971,14 @@ function draw(){
       ${(d.fee_flags||[]).length?`<div style="margin-top:4px">${(d.fee_flags||[]).map(f=>`<span class="chip">${esc(f)}</span>`).join(' ')}</div>`:''}
     </div>
     ${d.evidence?`<div class="callout ev"><b>Evidence</b><br>${esc(d.evidence)}</div>`:''}
+    ${d.doc_url?`<div class="callout" style="border-left:3px solid var(--accent)">
+      <b>Proposal</b> ${d.doc_signed?'<span class="chip" style="background:#1f6581;color:#fff">SIGNED</span>':''}<br>
+      <a href="${esc(d.doc_url)}" target="_blank" rel="noopener"
+         style="color:var(--accent);font-weight:600;word-break:break-word">${esc(d.doc_name||'Open in Dropbox')} ↗</a>
+      ${d.doc_count>1?`<div style="font-size:11.5px;color:var(--gray-500);margin-top:3px">+${d.doc_count-1} more in the Documents tab</div>`:''}
+    </div>`:''}
     <div class="tabs">
+      <div class="tab ${TAB==='docs'?'on':''}" onclick="setTab('docs')">Documents</div>
       <div class="tab ${TAB==='emails'?'on':''}" onclick="setTab('emails')">Email thread</div>
       <div class="tab ${TAB==='compose'?'on':''}" onclick="setTab('compose')">Compose follow-up</div>
       <div class="tab ${TAB==='acts'?'on':''}" onclick="setTab('acts')">Activity log</div>
@@ -965,6 +986,7 @@ function draw(){
       <div class="tab ${TAB==='edit'?'on':''}" onclick="setTab('edit')">Edit</div>
     </div><div id="tabbody"><div class="empty">Loading...</div></div>
   </div>`;
+  if(TAB==='docs')loadDocs();
   if(TAB==='emails')loadEmails();
   if(TAB==='compose')loadCompose();
   if(TAB==='acts')loadActs();
@@ -1402,6 +1424,56 @@ async function doCompose(){
     await api('deals?id=eq.'+CUR.id,{method:'PATCH',body:JSON.stringify({last_contact_date:new Date().toISOString().slice(0,10)})});
     await load();CUR=DEALS.find(x=>x.id===CUR.id);
   }catch(e){st.innerHTML='<span class="err">'+esc(e.message)+'</span>';}
+}
+/* Documents tab — Dropbox proposals attached to this deal.
+   Rows come from `deal_documents`, populated by ~/.hermes/scripts/crm_dropbox_docs.py
+   (7am cron). `url` is a deterministic dropbox.com/home path, NOT a shared link:
+   the Plaza Dropbox app lacks the sharing.write scope, and get_temporary_link
+   expires in 4h so it cannot be stored. These links open for anyone signed into
+   the Plaza Dropbox. Do not "upgrade" them to shared links without first enabling
+   sharing.write in the App Console and re-running the sync. */
+/* NOTE: `fsize` already exists at line ~1027 (used by email attachment chips) —
+   reuse it rather than redeclaring, which is a hard SyntaxError that blanks the
+   entire app since all the JS lives in one <script> block. */
+async function loadDocs(){
+  const b=document.getElementById('tabbody');
+  let ds=[];
+  try{
+    ds=await api(`deal_documents?deal_id=eq.${CUR.id}&select=*`
+      +`&order=is_primary.desc,is_signed.desc,file_name.asc`);
+  }catch(e){
+    b.innerHTML='<div class="empty"><span class="err">'+esc(e.message)+'</span></div>';return;
+  }
+  if(!ds.length){
+    b.innerHTML=`<div class="empty">No Dropbox proposal found for this deal.<br>
+      <span style="font-size:11.5px;color:var(--gray-500)">The 7am Dropbox sync attaches any
+      document in the project folder named like a proposal. If this project has one,
+      check the folder number matches <b>${esc(CUR.project_no||'(blank)')}</b>.</span></div>`;
+    return;
+  }
+  const sg=ds.filter(x=>x.is_signed).length;
+  b.innerHTML=`<div style="margin-bottom:10px;font-size:12px;color:var(--gray-500)">
+      ${ds.length} document${ds.length>1?'s':''} in Dropbox${sg?` · <b style="color:#1f6581">${sg} signed</b>`:''}
+    </div>`
+   +ds.map(x=>`<div class="act" style="display:flex;gap:10px;align-items:flex-start">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:3px">
+          ${x.is_primary?'<span class="chip" style="background:#020000;color:#fff">PRIMARY</span>':''}
+          ${x.is_signed?'<span class="chip" style="background:#1f6581;color:#fff">SIGNED</span>':''}
+          ${x.doc_kind&&x.doc_kind!=='proposal'?`<span class="chip">${esc(x.doc_kind)}</span>`:''}
+          ${x.source_year?`<span class="chip">${esc(x.source_year)}</span>`:''}
+        </div>
+        <div class="note" style="word-break:break-word"><b>${esc(x.file_name)}</b></div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">
+          ${esc(fsize(x.size_bytes))}${x.modified_at?' · modified '+esc(String(x.modified_at).replace('T',' ').slice(0,10)):''}
+        </div>
+      </div>
+      <a href="${esc(x.url)}" target="_blank" rel="noopener"
+         style="flex:0 0 auto;padding:8px 12px;min-height:36px;display:inline-flex;
+                align-items:center;border:1px solid var(--line);border-radius:6px;
+                text-decoration:none;color:var(--accent);font-size:12.5px;font-weight:600">
+        Open ↗</a>
+    </div>`).join('');
 }
 async function loadActs(){
   const b=document.getElementById('tabbody');
