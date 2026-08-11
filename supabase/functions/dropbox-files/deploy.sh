@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Deploy the dropbox-files edge function to the Plaza CRM Supabase project.
 #
+#   export DROPBOX_APP_KEY=...
+#   export DROPBOX_APP_SECRET=...
+#   export DROPBOX_REFRESH_TOKEN=...
 #   ./supabase/functions/dropbox-files/deploy.sh
 #
-# Reads the three Dropbox values from the environment if they are already set,
-# otherwise prompts for them (secret input is not echoed). Reuse the SAME app
+# Everything targets the project by --project-ref, so there is NO `supabase link`
+# and therefore no database-password prompt to stall on. Reuse the SAME app
 # credentials the 7am crm_dropbox_docs.py sync already uses — that app is live
-# and, as of 2026-08-10, carries sharing.write. Registering a second app is
-# unnecessary and gives you two tokens to rotate.
+# and, as of 2026-08-10, carries sharing.write.
 set -euo pipefail
 
 PROJECT_REF="zhxwkntrndaeqtkmbtsh"
@@ -20,34 +22,46 @@ command -v supabase >/dev/null || {
   exit 1
 }
 
-# Where the existing sync keeps its Dropbox credentials, if you want to copy
-# them across rather than retype:
-#   grep -ri dropbox ~/.hermes/ --include='*.env' --include='*.json' --include='*.py' -l
+# Must be authenticated. `supabase login` opens a browser; SUPABASE_ACCESS_TOKEN
+# (from https://supabase.com/dashboard/account/tokens) works headlessly.
+if [ -z "${SUPABASE_ACCESS_TOKEN:-}" ]; then
+  if ! supabase projects list >/dev/null 2>&1; then
+    echo "Not logged in to Supabase. Do ONE of these, then re-run this script:"
+    echo "  supabase login"
+    echo "  export SUPABASE_ACCESS_TOKEN=<token from https://supabase.com/dashboard/account/tokens>"
+    exit 1
+  fi
+fi
+
+# Prompt for anything not already exported. Input is VISIBLE on purpose: a
+# hidden prompt is indistinguishable from a hung script.
 ask() { # ask VARNAME "Prompt"
   local var="$1" prompt="$2" val="${!1:-}"
   if [ -z "$val" ]; then
-    read -rsp "$prompt: " val; echo
+    printf '%s (typing is visible): ' "$prompt"
+    IFS= read -r val </dev/tty
   fi
   [ -n "$val" ] || { echo "$var is required"; exit 1; }
   printf -v "$var" '%s' "$val"
 }
 
+# Where the existing sync keeps its Dropbox credentials, if you would rather
+# copy them across than retype:
+#   grep -ri dropbox ~/.hermes/ -l
 ask DROPBOX_APP_KEY       "Dropbox app key"
 ask DROPBOX_APP_SECRET    "Dropbox app secret"
 ask DROPBOX_REFRESH_TOKEN "Dropbox refresh token"
 
 cd "$ROOT"
-echo "==> linking project $PROJECT_REF"
-supabase link --project-ref "$PROJECT_REF"
 
-echo "==> setting secrets"
-supabase secrets set \
+echo "==> setting secrets on $PROJECT_REF"
+supabase secrets set --project-ref "$PROJECT_REF" \
   DROPBOX_APP_KEY="$DROPBOX_APP_KEY" \
   DROPBOX_APP_SECRET="$DROPBOX_APP_SECRET" \
   DROPBOX_REFRESH_TOKEN="$DROPBOX_REFRESH_TOKEN"
 
-echo "==> deploying $FN"
-supabase functions deploy "$FN"
+echo "==> deploying $FN (first deploy pulls the unpdf dependency; ~30-60s)"
+supabase functions deploy "$FN" --project-ref "$PROJECT_REF"
 
 echo "==> verifying"
 # Unauthenticated POST must now be REJECTED (401), not missing (404).
@@ -58,7 +72,7 @@ case "$code" in
   401|403) echo "OK — function is live and rejecting unauthenticated calls (HTTP $code)";;
   404)     echo "FAILED — still 404. The deploy did not land; check the output above."; exit 1;;
   *)       echo "Unexpected HTTP $code — function responded, but check the logs:"
-           echo "  supabase functions logs $FN";;
+           echo "  supabase functions logs $FN --project-ref $PROJECT_REF";;
 esac
 
 cat <<'EOF'
