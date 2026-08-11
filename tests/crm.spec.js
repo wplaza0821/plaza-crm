@@ -247,6 +247,52 @@ test('recurring CA rate x term lands in the CA phase, not Design', async ({ page
   await expect(econ).toContainText('$65,000');
 });
 
+test('Documents badges the revision the client actually received', async ({ page }) => {
+  await stubBackend(page);
+  const errors = await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Documents' }).click();
+  const row = page.locator('.drawer .act', { hasText: 'Dome Proposal Rev2.pdf' });
+  await expect(row).toContainText('SENT 2026-07-11');
+  await expect(row).toContainText('LATEST SENT');
+  await expect(page.locator('#tabbody')).toContainText('Latest sent to client');
+  expect(errors).toEqual([]);
+});
+
+test('an unsent PDF is flagged NOT SENT and its fee scan is blocked', async ({ page }) => {
+  // nothing was ever emailed, so no document may be scanned
+  await stubBackend(page, { sentAttachments: [] });
+  const errors = await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Documents' }).click();
+  const row = page.locator('.drawer .act', { hasText: 'Dome Proposal Rev2.pdf' });
+  await expect(row).toContainText('NOT SENT');
+  await expect(page.locator('.drawer button', { hasText: 'Scan for fee' })).toHaveCount(0);
+  await expect(page.locator('.drawer button', { hasText: 'Scan blocked' })).toHaveCount(1);
+  await expect(page.locator('#tabbody')).toContainText('Nothing sent yet');
+  expect(errors).toEqual([]);
+});
+
+test('a sent PDF stays scannable', async ({ page }) => {
+  await stubBackend(page);
+  await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Documents' }).click();
+  await expect(page.locator('.drawer button', { hasText: 'Scan for fee' })).toHaveCount(1);
+  await expect(page.locator('.drawer button', { hasText: 'Scan blocked' })).toHaveCount(0);
+});
+
+test('send status degrades to a notice when Graph is unavailable', async ({ page }) => {
+  await stubBackend(page, { mailDown: true });
+  await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Documents' }).click();
+  await expect(page.locator('#tabbody')).toContainText('Send status unavailable');
+  // documents still list, and an unverifiable send status must not block scanning
+  await expect(page.locator('.drawer .act', { hasText: 'Dome Proposal Rev2.pdf' })).toBeVisible();
+  await expect(page.locator('.drawer button', { hasText: 'Scan blocked' })).toHaveCount(0);
+});
+
 test('mobile viewport: burger nav present, board scrolls', async ({ page }) => {
   await stubBackend(page);
   const errors = await bootCrm(page, { viewport: { width: 390, height: 844 } });

@@ -1218,6 +1218,58 @@ function loadEdit(){
      <div style="margin-top:8px;font-size:11.5px;color:var(--gray-400)">Fees live in the Deal economics block above.</div>`;
 }
 
+/* ---------- sent-mail cross-reference ----------
+   A Dropbox folder holds every revision ever produced; only some were actually
+   emailed to the client. This matches deal_documents rows against attachments
+   on OUTBOUND messages (graph-mail direction 'out'), so the tab can say which
+   revision the client actually holds — and so a fee is only ever scanned from
+   a document the client received.
+
+   Filenames are normalised before comparison: Outlook and re-saved copies vary
+   the punctuation, so "Dome Proposal Rev2.pdf", "Dome_Proposal_Rev2.pdf" and
+   "Dome Proposal Rev2 (1).pdf" must all match the same Dropbox file. */
+const normName=s=>String(s||'').toLowerCase()
+  .replace(/\.[a-z0-9]+$/,'')       // extension
+  .replace(/\s*\(\d+\)\s*$/,'')     // " (1)" duplicate suffix
+  .replace(/[\s_\-]+/g,' ')
+  .trim();
+
+let SENT_INDEX=null;   // {byName:Map, checked:bool, error:string|null}
+
+async function buildSentIndex(){
+  const out={byName:new Map(),checked:false,error:null};
+  if(!CUR.contact_email){out.error='no client contact on this deal';return out;}
+  try{
+    const kws=(CUR.keywords&&CUR.keywords.length)?CUR.keywords:[CUR.contact_email];
+    const ms=await fn({action:'search',keywords:kws,
+      contact_email:CUR.contact_email,strict_client:true,sibling_keywords:[]});
+    /* Only outbound messages carrying attachments are evidence of sending.
+       Attachment names live in the per-message detail, not the search summary,
+       so the list is capped to keep this to a handful of calls. */
+    const sent=(ms||[]).filter(m=>m.direction==='out'&&m.hasAttachments).slice(0,25);
+    for(const m of sent){
+      let full=null;
+      try{ full=await fn({action:'message',id:m.id}); }catch(_){ continue; }
+      for(const a of (full.attachments||[])){
+        const k=normName(a.name);
+        if(!k) continue;
+        const date=m.date||full.date||null;
+        const prev=out.byName.get(k);
+        if(!prev||String(date||'')>String(prev.date||'')){
+          out.byName.set(k,{date,subject:m.subject||full.subject||''});
+        }
+      }
+    }
+    out.checked=true;
+  }catch(e){ out.error=e.message; }
+  return out;
+}
+/* A document counts as sent when its normalised name matches a sent attachment. */
+function sentInfo(x){
+  if(!SENT_INDEX||!SENT_INDEX.checked) return null;
+  return SENT_INDEX.byName.get(normName(x.file_name))||null;
+}
+
 /* Live folder read. The Documents list is a 7am snapshot, so anything added to
    Dropbox today is invisible until tomorrow; this reads the folder now and
    reports what the snapshot is missing. Needs dropbox_folder set on the deal
@@ -1534,6 +1586,10 @@ async function loadDocs(){
     return;
   }
   DOCS_CACHE=ds;
+  /* Cross-reference sent mail before rendering so SENT/NOT SENT badges and the
+     scan gate are correct on first paint. Failure is non-fatal: the tab still
+     lists documents, just without send status. */
+  SENT_INDEX=await buildSentIndex();
   const sg=ds.filter(x=>x.is_signed).length;
   b.innerHTML=`<div style="margin-bottom:10px;font-size:12px;color:var(--gray-500);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <span>${ds.length} document${ds.length>1?'s':''} in Dropbox${sg?` · <b style="color:#1f6581">${sg} signed</b>`:''}
@@ -1543,11 +1599,22 @@ async function loadDocs(){
       <button class="sm" onclick="refreshDocsLive()" style="margin-left:auto"
         title="Read the Dropbox folder live instead of the 7am snapshot">Check Dropbox now</button>
     </div><div id="livedocs"></div>`
-   +ds.map(x=>`<div class="act" style="display:flex;gap:10px;align-items:flex-start">
+   +sentBanner(ds)
+   +ds.map(x=>{
+      const si=sentInfo(x);
+      const isNewest=si&&newestSent(ds)&&newestSent(ds).id===x.id;
+      /* Gate: a fee may only be scanned from a document the client actually
+         received, so the deal value can never come from an unsent revision. */
+      const scannable=/\.pdf$/i.test(x.file_name||'')&&docScanTarget(x)&&!!si;
+      const unsentPdf=/\.pdf$/i.test(x.file_name||'')&&docScanTarget(x)&&SENT_INDEX&&SENT_INDEX.checked&&!si;
+      return `<div class="act" style="display:flex;gap:10px;align-items:flex-start">
       <div style="flex:1;min-width:0">
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:3px">
           ${x.is_primary?'<span class="chip" style="background:#020000;color:#fff">PRIMARY</span>':''}
           ${x.is_signed?'<span class="chip" style="background:#1f6581;color:#fff">SIGNED</span>':''}
+          ${si?`<span class="chip" style="background:#1f6581;color:#fff" title="${esc(si.subject||'')}">SENT ${esc(String(si.date||'').slice(0,10))}</span>`:''}
+          ${isNewest?'<span class="chip" style="background:#e8eff2;color:#1f6581">LATEST SENT</span>':''}
+          ${unsentPdf?'<span class="chip" style="background:#fbe9e9;color:#cf2e2e" title="No sent email to this client carries this file">NOT SENT</span>':''}
           ${x.doc_kind&&x.doc_kind!=='proposal'?`<span class="chip">${esc(x.doc_kind)}</span>`:''}
           ${x.source_year?`<span class="chip">${esc(x.source_year)}</span>`:''}
         </div>
@@ -1566,13 +1633,52 @@ async function loadDocs(){
          style="flex:0 0 auto;padding:8px 12px;min-height:36px;border:1px solid var(--line);
                 border-radius:6px;background:#fff;cursor:pointer;font-size:12.5px;
                 font-weight:600;color:var(--gray-700)">Copy</button>`:''}
-      ${/\.pdf$/i.test(x.file_name||'')&&docScanTarget(x)?`<button onclick="scanDoc(${x.id})"
-         title="Extract fee amounts from this PDF"
+      ${scannable?`<button onclick="scanDoc(${x.id})"
+         title="Extract fee amounts from the version the client received"
          style="flex:0 0 auto;padding:8px 12px;min-height:36px;border:1px solid var(--line);
                 border-radius:6px;background:#fff;cursor:pointer;font-size:12.5px;
                 font-weight:600;color:var(--gray-700)">Scan for fee</button>`:''}
-    </div>`).join('')
+      ${unsentPdf?`<button disabled
+         title="This revision was never emailed to the client — the deal value must come from the version they received"
+         style="flex:0 0 auto;padding:8px 12px;min-height:36px;border:1px dashed var(--gray-300);
+                border-radius:6px;background:var(--gray-50);cursor:not-allowed;font-size:12.5px;
+                font-weight:600;color:var(--gray-400)">Scan blocked</button>`:''}
+    </div>`;}).join('')
    +`<div id="scanout"></div>`;
+}
+/* Newest document that has a matching sent email — the revision the client
+   most recently received. */
+function newestSent(ds){
+  let best=null,bestDate='';
+  for(const x of ds){
+    const si=sentInfo(x); if(!si) continue;
+    const d=String(si.date||'');
+    if(!best||d>bestDate){best=x;bestDate=d;}
+  }
+  return best;
+}
+/* Headline for the sent cross-reference: reports the latest revision the client
+   holds, and warns when Dropbox has something newer that was never sent. */
+function sentBanner(ds){
+  if(!SENT_INDEX) return '';
+  if(SENT_INDEX.error||!SENT_INDEX.checked){
+    return `<div style="margin-bottom:10px;font-size:11.5px;color:var(--gray-400)">
+      Send status unavailable (${esc(SENT_INDEX.error||'not checked')}) — documents listed without SENT badges.</div>`;
+  }
+  const ns=newestSent(ds);
+  if(!ns){
+    return `<div class="callout" style="border-left:3px solid var(--red);margin-bottom:10px">
+      <b>Nothing sent yet</b><br><span style="font-size:11.5px;color:var(--gray-500)">
+      No outbound email to ${esc(CUR.contact_email||'the client')} carries any of these files.</span></div>`;
+  }
+  const si=sentInfo(ns);
+  /* "newer in Dropbox" = modified after the latest send, i.e. an unsent revision */
+  const newer=ds.filter(x=>!sentInfo(x)&&x.modified_at&&si.date&&String(x.modified_at)>String(si.date));
+  return `<div class="callout" style="border-left:3px solid ${newer.length?'#cf2e2e':'#1f6581'};margin-bottom:10px">
+      <b>Latest sent to client:</b> ${esc(ns.file_name)} · ${esc(String(si.date||'').slice(0,10))}
+      ${newer.length?`<br><span style="font-size:11.5px;color:#cf2e2e">
+        ${newer.length} newer file${newer.length>1?'s':''} in Dropbox never sent — fee scanning is blocked on ${newer.length>1?'them':'it'}.</span>`:''}
+    </div>`;
 }
 /* Copy a share link to the clipboard. Only offered for link_kind='shared_link'
    (a real Dropbox share URL that works for people outside the team); web_path

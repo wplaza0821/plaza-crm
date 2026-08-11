@@ -80,7 +80,30 @@ async function stubBackend(page, opts = {}) {
     if (url.pathname.startsWith('/auth/v1/user')) return json(route, { email: 'test@plaza.test' });
     if (url.pathname.startsWith('/auth/v1/token'))
       return json(route, { access_token: 'fake-token-2', refresh_token: 'r2', expires_in: 3600 });
-    if (url.pathname.startsWith('/functions/v1/graph-mail')) return json(route, []);
+    // graph-mail: opts.sentAttachments names the files the client was emailed.
+    // Default: the Rev2 proposal was sent; Rev3 (live-only) never was.
+    if (url.pathname.startsWith('/functions/v1/graph-mail')) {
+      if (opts.mailDown) return json(route, { error: 'graph unavailable' }, 500);
+      const names = opts.sentAttachments === undefined
+        ? ['Dome Proposal Rev2.pdf'] : opts.sentAttachments;
+      if (body?.action === 'search') {
+        if (!names.length) return json(route, []);
+        return json(route, [{
+          id: 'msg-1', direction: 'out', hasAttachments: true,
+          subject: 'Dome proposal', date: '2026-07-11T09:00:00Z',
+          to: [{ address: 'board@dome.com' }], preview: 'Attached please find…',
+        }]);
+      }
+      if (body?.action === 'message') {
+        return json(route, {
+          id: 'msg-1', subject: 'Dome proposal', date: '2026-07-11T09:00:00Z',
+          from: { name: 'William', address: 'william@plazaandassociates.com' },
+          to: [{ address: 'board@dome.com' }], body: 'Attached please find the proposal.',
+          attachments: names.map((n) => ({ name: n, size: 482000 })),
+        });
+      }
+      return json(route, []);
+    }
     if (url.pathname.startsWith('/functions/v1/dropbox-files')) {
       if (opts.dropboxDown) return json(route, { error: 'Function not found' }, 404);
       if (body?.action === 'list') {
