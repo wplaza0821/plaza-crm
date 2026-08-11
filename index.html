@@ -545,6 +545,8 @@ const FN=SB_URL+'/functions/v1/graph-mail';
 const FN_DBX=SB_URL+'/functions/v1/dropbox-files';
 const LS='plaza_crm_session';
 let SESSION=null, DEALS=[], CUR=null, TAB='emails', VIEW='pipeline';
+/* Rows for the currently open Documents tab, so copyDoc() can find a url by id. */
+let DOCS_CACHE=[];
 /* Email thread: show only correspondence the CLIENT is actually a participant in.
    Default ON — keyword-only matching let 33.8% noise through (vendors, robots,
    unrelated projects). Toggle in the Email thread tab to see all keyword matches. */
@@ -1451,9 +1453,13 @@ async function loadDocs(){
       check the folder number matches <b>${esc(CUR.project_no||'(blank)')}</b>.</span></div>`;
     return;
   }
+  DOCS_CACHE=ds;
   const sg=ds.filter(x=>x.is_signed).length;
   b.innerHTML=`<div style="margin-bottom:10px;font-size:12px;color:var(--gray-500)">
       ${ds.length} document${ds.length>1?'s':''} in Dropbox${sg?` · <b style="color:#1f6581">${sg} signed</b>`:''}
+      ${ds.some(x=>x.link_kind==='shared_link')
+        ?' · <span title="Real Dropbox share links — work for clients with no Dropbox account">client-shareable 🔗</span>'
+        :' · <span title="Opens only for signed-in Plaza Dropbox members">internal links</span>'}
     </div>`
    +ds.map(x=>`<div class="act" style="display:flex;gap:10px;align-items:flex-start">
       <div style="flex:1;min-width:0">
@@ -1473,7 +1479,25 @@ async function loadDocs(){
                 align-items:center;border:1px solid var(--line);border-radius:6px;
                 text-decoration:none;color:var(--accent);font-size:12.5px;font-weight:600">
         Open ↗</a>
+      ${x.link_kind==='shared_link'?`<button onclick="copyDoc(${x.id},this)"
+         title="Copy a client-shareable link"
+         style="flex:0 0 auto;padding:8px 12px;min-height:36px;border:1px solid var(--line);
+                border-radius:6px;background:#fff;cursor:pointer;font-size:12.5px;
+                font-weight:600;color:var(--gray-700)">Copy</button>`:''}
     </div>`).join('');
+}
+/* Copy a share link to the clipboard. Only offered for link_kind='shared_link'
+   (a real Dropbox share URL that works for people outside the team); web_path
+   links only resolve for signed-in Plaza members, so offering "copy" on those
+   would hand William a URL that 404s for his client. */
+async function copyDoc(id,btn){
+  const d=(DOCS_CACHE||[]).find(x=>x.id===id); if(!d) return;
+  const url=(d.url||'').replace('&dl=0','');
+  try{ await navigator.clipboard.writeText(url); }
+  catch(e){ const t=document.createElement('textarea');t.value=url;
+    document.body.appendChild(t);t.select();document.execCommand('copy');t.remove(); }
+  const was=btn.textContent; btn.textContent='Copied ✓';
+  setTimeout(()=>{btn.textContent=was;},1400);
 }
 async function loadActs(){
   const b=document.getElementById('tabbody');
