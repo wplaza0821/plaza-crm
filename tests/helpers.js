@@ -14,7 +14,7 @@ function fixtureDeals() {
       id: 1, name: 'Dome Repairs', client: 'Dome Condo Assn', project_no: '26-101',
       contact_name: 'Dana Board', contact_email: 'board@dome.com',
       proposal_fee: 48000, options_nte: null, rate: null, rate_unit: null,
-      term_months: null, ca_fee: null, billed_to_date: null, fee_source: null,
+      term_months: null, ca_fee: 6000, billed_to_date: null, fee_source: null,
       amount: null, stage: 'Proposal Sent', priority: 'HIGH',
       proposal_sent_date: daysAgo(30), last_contact_date: daysAgo(20),
       next_action: 'Follow up on proposal', next_action_due: today(),
@@ -43,9 +43,28 @@ function fixtureDeals() {
   ];
 }
 
+// Rows of deal_documents as the 7am Dropbox sync writes them.
+function fixtureDocs() {
+  return [
+    {
+      id: 11, deal_id: 1, file_name: 'Dome Proposal Rev2.pdf', size_bytes: 482000,
+      modified_at: '2026-07-10T12:00:00Z', doc_kind: 'proposal', source_year: 2026,
+      is_primary: true, is_signed: true, link_kind: 'shared_link',
+      url: 'https://www.dropbox.com/scl/fi/abc/Dome%20Proposal%20Rev2.pdf?dl=0',
+    },
+    {
+      id: 12, deal_id: 1, file_name: 'Dome Scope Notes.docx', size_bytes: 24000,
+      modified_at: '2026-07-08T12:00:00Z', doc_kind: 'scope', source_year: 2026,
+      is_primary: false, is_signed: false, link_kind: 'shared_link',
+      url: 'https://www.dropbox.com/scl/fi/def/Dome%20Scope%20Notes.docx?dl=0',
+    },
+  ];
+}
+
 // Stub the whole backend. Returns {captured, state} for assertions.
-async function stubBackend(page) {
-  const state = { deals: fixtureDeals(), activities: [], nextId: 100 };
+// opts.dropboxDown simulates the edge function not being deployed.
+async function stubBackend(page, opts = {}) {
+  const state = { deals: fixtureDeals(), docs: fixtureDocs(), activities: [], nextId: 100 };
   const captured = [];
   const json = (route, body, status = 200) =>
     route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -63,23 +82,43 @@ async function stubBackend(page) {
       return json(route, { access_token: 'fake-token-2', refresh_token: 'r2', expires_in: 3600 });
     if (url.pathname.startsWith('/functions/v1/graph-mail')) return json(route, []);
     if (url.pathname.startsWith('/functions/v1/dropbox-files')) {
+      if (opts.dropboxDown) return json(route, { error: 'Function not found' }, 404);
       if (body?.action === 'list') {
         return json(route, { files: [
           { name: 'Dome Proposal Rev2.pdf', path: '/Proposals/Dome/Dome Proposal Rev2.pdf',
-            is_folder: false, size: 482000, modified: new Date().toISOString(), is_pdf: true },
+            is_folder: false, size: 482000, modified: '2026-07-10T12:00:00Z', is_pdf: true },
+          // present in Dropbox but NOT in the deal_documents snapshot
+          { name: 'Dome Proposal Rev3.pdf', path: '/Proposals/Dome/Dome Proposal Rev3.pdf',
+            is_folder: false, size: 501000, modified: new Date().toISOString(), is_pdf: true },
           { name: 'Site Photos', path: '/Proposals/Dome/Site Photos',
             is_folder: true, size: null, modified: null, is_pdf: false },
         ] });
       }
       if (body?.action === 'link') return json(route, { url: 'https://dl.example.test/fake' });
       if (body?.action === 'value') {
+        // accepts either a path or a shared_url
+        if (!body.path && !body.shared_url) return json(route, { error: 'path or shared_url required' }, 400);
         return json(route, { file: 'Dome Proposal Rev2.pdf', candidates: [
           { amount: 52500, context: 'Total lump sum fee for the scope described herein: $52,500.00', score: 4 },
           { amount: 1500, context: 'permit allowance of $1,500', score: -1 },
         ] });
       }
-      if (body?.action === 'link') return json(route, { url: 'https://dl.example.test/fake' });
       return json(route, { error: 'unknown action' }, 400);
+    }
+    if (url.pathname.startsWith('/rest/v1/deal_documents')) {
+      const m = url.search.match(/deal_id=eq\.(\d+)/);
+      return json(route, state.docs.filter((d) => !m || d.deal_id === +m[1]));
+    }
+    if (url.pathname.startsWith('/rest/v1/deal_primary_doc')) {
+      const byDeal = {};
+      state.docs.forEach((d) => {
+        const e = (byDeal[d.deal_id] = byDeal[d.deal_id] || {
+          deal_id: d.deal_id, doc_count: 0, signed_count: 0, primary_name: null, primary_url: null });
+        e.doc_count++;
+        if (d.is_signed) e.signed_count++;
+        if (d.is_primary) { e.primary_name = d.file_name; e.primary_url = d.url; }
+      });
+      return json(route, Object.values(byDeal));
     }
 
     // reads come from the deals_value view, writes go to the deals table

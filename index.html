@@ -679,6 +679,32 @@ function dealValue(d){
   const v=fee+nte+ca+rec;
   return v||(+d.amount||0);
 }
+/* Phase split of the same contract value dealValue() returns.
+   DESIGN = proposal fee + options/NTE  (the design-phase scope)
+   CA     = CA/hourly fee + recurring rate x term  (construction administration)
+   A legacy row carrying only the old scalar `amount` cannot be attributed to a
+   phase, so it lands in `unsplit` rather than being silently called Design —
+   design + ca + unsplit always equals dealValue(d). */
+function dealParts(d){
+  const fee=+d.proposal_fee||0, nte=+d.options_nte||0, ca=+d.ca_fee||0;
+  const rate=+d.rate||0, term=+d.term_months||0;
+  const rec=(d.rate_unit==='month'&&rate&&term)?rate*term:0;
+  const design=fee+nte, caTotal=ca+rec;
+  const known=design+caTotal;
+  const unsplit=known?0:(+d.amount||0);
+  return {design,ca:caTotal,unsplit,total:known||unsplit};
+}
+const sumParts=list=>list.reduce((a,d)=>{const p=dealParts(d);
+  a.design+=p.design;a.ca+=p.ca;a.unsplit+=p.unsplit;a.total+=p.total;return a;},
+  {design:0,ca:0,unsplit:0,total:0});
+/* "$120,000 design · $18,000 CA" — omits a phase that is zero. */
+function phaseLine(p){
+  const bits=[];
+  if(p.design) bits.push(money(p.design)+' design');
+  if(p.ca) bits.push(money(p.ca)+' CA');
+  if(p.unsplit) bits.push(money(p.unsplit)+' unsplit');
+  return bits.join(' · ');
+}
 function valueNote(d){
   const bits=[];
   if(+d.proposal_fee) bits.push(money(+d.proposal_fee)+' fee');
@@ -742,14 +768,16 @@ function kpis(){
   const WON_CLOSED=['Won'];
   const open=DEALS.filter(d=>d.is_open), won=DEALS.filter(d=>WON_CLOSED.includes(d.stage));
   const od=open.filter(d=>d.overdue);
-  const openVal=open.reduce((a,b)=>a+dealValue(b),0);
-  const wonVal=won.reduce((a,b)=>a+dealValue(b),0);
+  const openP=sumParts(open), wonP=sumParts(won);
+  const openVal=openP.total, wonVal=wonP.total;
   const ar=DEALS.filter(d=>d.stage==='Won-Pending Payment').reduce((a,b)=>a+dealValue(b),0);
   document.getElementById('kpis').innerHTML=`
    <div class="kpi"><small>Open pipeline</small><b>${money(openVal)||'$0'}</b>
-     <div class="sub">${open.length} active deals</div></div>
+     <div class="sub">${open.length} active deals</div>
+     <div class="sub">${phaseLine(openP)||'—'}</div></div>
    <div class="kpi"><small>Won 2026</small><b>${money(wonVal)||'$0'}</b>
-     <div class="sub">${won.length} deals closed</div></div>
+     <div class="sub">${won.length} deals closed</div>
+     <div class="sub">${phaseLine(wonP)||'—'}</div></div>
    <div class="kpi"><small>Needs follow-up</small>
      <b style="color:${od.length?'var(--red)':'var(--black)'}">${od.length}</b>
      <div class="sub">14+ days no contact</div></div>
@@ -838,11 +866,17 @@ function cardHTML(d){
     </div></div>`;
 }
 /* table view */
+/* `amount` is the legacy scalar and is NULL on every economics-model deal, so
+   the old Amount column rendered "—" for them. Money columns are computed from
+   dealParts() instead: Design | CA | Value. */
 const COLDEF=[['project_no','Project'],['name','Deal'],['stage','Stage'],['priority','Priority'],
-  ['amount','Amount'],['days_since_contact','Last contact'],['next_action','Next action']];
+  ['design','Design'],['ca','CA'],['value','Value'],
+  ['days_since_contact','Last contact'],['next_action','Next action']];
+const COMPUTED={design:d=>dealParts(d).design, ca:d=>dealParts(d).ca, value:d=>dealParts(d).total};
 function table(v,r){
   const dir=SORT.dir, k=SORT.k;
   const sorted=[...r].sort((a,b)=>{
+    if(COMPUTED[k]) return (COMPUTED[k](a)-COMPUTED[k](b))*dir;
     let x=a[k],y=b[k];
     if(k==='amount'||k==='days_since_contact'){x=+x||0;y=+y||0;return (x-y)*dir;}
     return String(x==null?'':x).localeCompare(String(y==null?'':y))*dir;});
@@ -850,17 +884,28 @@ function table(v,r){
   for(const [key,lbl] of COLDEF)
     h+=`<th onclick="sortBy('${key}')">${lbl}${SORT.k===key?(dir>0?' &#9650;':' &#9660;'):''}</th>`;
   h+='</tr></thead><tbody>';
-  if(!sorted.length) h+='<tr><td colspan="7"><div class="empty">No deals match.</div></td></tr>';
+  if(!sorted.length) h+=`<tr><td colspan="${COLDEF.length}"><div class="empty">No deals match.</div></td></tr>`;
   for(const d of sorted){
+    const p=dealParts(d);
     h+=`<tr class="${CUR&&CUR.id===d.id?'sel':''}" onclick="open_(${d.id})">
       <td><span class="pill pn">${esc(d.project_no||'—')}</span></td>
       <td><div class="nm">${esc(d.name)}</div><div class="cl">${esc(d.client||'')}</div></td>
       <td>${esc(d.stage)}</td>
       <td><span class="pill ${esc(d.priority)}">${esc(d.priority)}</span></td>
-      <td class="num">${money(d.amount)||'—'}</td>
+      <td class="num">${money(p.design)||'—'}</td>
+      <td class="num">${money(p.ca)||'—'}</td>
+      <td class="num"><b>${money(p.total)||'—'}</b>${p.unsplit?'<div style="font-size:10px;color:var(--gray-400)">unsplit</div>':''}</td>
       <td class="num">${d.days_since_contact!=null?`<span class="${d.overdue?'err':''}">${d.days_since_contact}d</span>`:'—'}</td>
       <td style="max-width:280px;font-size:12px;color:var(--gray-500)">${esc((d.next_action||'—').slice(0,90))}</td></tr>`;
   }
+  /* totals row so the phase split reads as a column sum, not just per-deal */
+  const tp=sumParts(sorted);
+  h+=`<tr style="background:var(--gray-50)">
+      <td colspan="4"><b>Total (${sorted.length})</b></td>
+      <td class="num"><b>${money(tp.design)||'—'}</b></td>
+      <td class="num"><b>${money(tp.ca)||'—'}</b></td>
+      <td class="num"><b>${money(tp.total)||'—'}</b></td>
+      <td colspan="2"></td></tr>`;
   v.innerHTML=h+'</tbody></table></div>';
 }
 function sortBy(k){SORT.dir=(SORT.k===k)?-SORT.dir:1;SORT.k=k;renderView();}
@@ -890,15 +935,19 @@ function contacts(v){
 }
 /* forecast view */
 function forecast(v){
-  let h='<div class="tbl-wrap"><table><thead><tr><th>Stage</th><th>Deals</th><th>Value</th><th>Share of pipeline</th></tr></thead><tbody>';
-  const tot=DEALS.reduce((a,b)=>a+dealValue(b),0)||1;
+  let h='<div class="tbl-wrap"><table><thead><tr><th>Stage</th><th>Deals</th>'
+    +'<th>Design</th><th>CA</th><th>Value</th><th>Share of pipeline</th></tr></thead><tbody>';
+  const all=sumParts(DEALS);
+  const tot=all.total||1;
   for(const st of COLS){
     const sub=DEALS.filter(d=>d.stage===st);
     if(!sub.length)continue;
-    const val=sub.reduce((a,b)=>a+dealValue(b),0);
-    const pct=Math.round(val/tot*100);
+    const p=sumParts(sub);
+    const pct=Math.round(p.total/tot*100);
     h+=`<tr><td><b>${esc(st)}</b></td><td class="num">${sub.length}</td>
-      <td class="num">${money(val)||'—'}</td>
+      <td class="num">${money(p.design)||'—'}</td>
+      <td class="num">${money(p.ca)||'—'}</td>
+      <td class="num">${money(p.total)||'—'}</td>
       <td><div style="display:flex;align-items:center;gap:8px">
         <div style="flex:1;height:7px;background:var(--gray-100);border-radius:4px;overflow:hidden;min-width:70px">
           <div style="width:${pct}%;height:100%;background:var(--accent)"></div></div>
@@ -907,7 +956,11 @@ function forecast(v){
   }
   h+=`<tr style="background:var(--gray-50)"><td><b>Total</b></td>
       <td class="num"><b>${DEALS.length}</b></td>
-      <td class="num"><b>${money(tot)}</b></td><td></td></tr>`;
+      <td class="num"><b>${money(all.design)||'—'}</b></td>
+      <td class="num"><b>${money(all.ca)||'—'}</b></td>
+      <td class="num"><b>${money(all.total)}</b></td><td></td></tr>`;
+  if(all.unsplit) h+=`<tr><td colspan="6" style="font-size:11.5px;color:var(--gray-400)">
+      ${money(all.unsplit)} on legacy deals has no phase breakdown — set a proposal fee / CA fee to split it.</td></tr>`;
   v.innerHTML=h+'</tbody></table></div>';
 }
 
@@ -969,6 +1022,17 @@ function draw(){
         <span id="fst"></span>
         <span style="color:var(--gray-400);font-size:11.5px">Contract value = fee + options + (rate × term) + CA</span>
       </div>
+      <div style="margin-top:9px;padding-top:9px;border-top:1px solid var(--gray-200);display:flex;gap:18px;flex-wrap:wrap">
+        <div><div style="font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--gray-400)">Design phase</div>
+          <b style="font-size:15px">${money(dealParts(d).design)||'—'}</b>
+          <div style="font-size:10.5px;color:var(--gray-400)">fee + options</div></div>
+        <div><div style="font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--gray-400)">CA phase</div>
+          <b style="font-size:15px">${money(dealParts(d).ca)||'—'}</b>
+          <div style="font-size:10.5px;color:var(--gray-400)">CA fee + rate × term</div></div>
+        <div><div style="font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--gray-400)">Total</div>
+          <b style="font-size:15px">${money(dealParts(d).total)||'—'}</b>
+          ${dealParts(d).unsplit?'<div style="font-size:10.5px;color:var(--gray-400)">legacy, unsplit</div>':''}</div>
+      </div>
       ${d.fee_source?`<div style="margin-top:7px;font-size:11px;color:var(--gray-500)">parsed from: ${esc(d.fee_source)}</div>`:''}
       ${(d.fee_flags||[]).length?`<div style="margin-top:4px">${(d.fee_flags||[]).map(f=>`<span class="chip">${esc(f)}</span>`).join(' ')}</div>`:''}
     </div>
@@ -984,7 +1048,6 @@ function draw(){
       <div class="tab ${TAB==='emails'?'on':''}" onclick="setTab('emails')">Email thread</div>
       <div class="tab ${TAB==='compose'?'on':''}" onclick="setTab('compose')">Compose follow-up</div>
       <div class="tab ${TAB==='acts'?'on':''}" onclick="setTab('acts')">Activity log</div>
-      <div class="tab ${TAB==='files'?'on':''}" onclick="setTab('files')">Files</div>
       <div class="tab ${TAB==='edit'?'on':''}" onclick="setTab('edit')">Edit</div>
     </div><div id="tabbody"><div class="empty">Loading...</div></div>
   </div>`;
@@ -992,7 +1055,6 @@ function draw(){
   if(TAB==='emails')loadEmails();
   if(TAB==='compose')loadCompose();
   if(TAB==='acts')loadActs();
-  if(TAB==='files')loadFiles();
   if(TAB==='edit')loadEdit();
 }
 function setTab(t){TAB=t;draw();}
@@ -1156,72 +1218,90 @@ function loadEdit(){
      <div style="margin-top:8px;font-size:11.5px;color:var(--gray-400)">Fees live in the Deal economics block above.</div>`;
 }
 
-/* ---------------- Dropbox files + proposal fee scan ---------------- */
-async function loadFiles(){
-  const b=document.getElementById('tabbody');
+/* Live folder read. The Documents list is a 7am snapshot, so anything added to
+   Dropbox today is invisible until tomorrow; this reads the folder now and
+   reports what the snapshot is missing. Needs dropbox_folder set on the deal
+   and the edge function deployed — otherwise it says so and the snapshot list
+   stays exactly as it was. */
+async function refreshDocsLive(){
+  const box=document.getElementById('livedocs');
   if(!CUR.dropbox_folder){
-    b.innerHTML=`<div class="empty">No Dropbox folder linked to this deal.<br>
-      <span style="font-size:12px">Set one in the <a href="#" onclick="setTab('edit');return false" style="color:var(--accent)">Edit</a> tab
-      (e.g. <code>/Proposals/${esc(CUR.client||'Client')}</code>) to browse proposals here.</span></div>`;
+    box.innerHTML=`<div class="empty" style="padding:10px">No Dropbox folder set on this deal —
+      add one in the <a href="#" onclick="setTab('edit');return false" style="color:var(--accent)">Edit</a> tab to check live.</div>`;
     return;
   }
-  b.innerHTML='<div class="empty">Reading Dropbox folder...</div>';
+  box.innerHTML='<div class="empty" style="padding:10px">Reading Dropbox folder...</div>';
   try{
     const d=await fnD({action:'list',path:CUR.dropbox_folder});
-    const fs=d.files||[];
-    if(!fs.length){b.innerHTML='<div class="empty">Folder is empty.</div>';return;}
-    b.innerHTML=`<div style="font-size:11.5px;color:var(--gray-400);margin-bottom:9px">${esc(CUR.dropbox_folder)} &middot; ${fs.length} item${fs.length>1?'s':''}</div>`
-      +fs.map((f,i)=>`<div class="act" style="display:flex;align-items:center;gap:10px">
-        <span style="flex:0 0 18px;text-align:center">${f.is_folder?'&#128193;':(f.is_pdf?'&#128196;':'&#128441;')}</span>
+    const files=(d.files||[]).filter(f=>!f.is_folder);
+    const known=new Set((DOCS_CACHE||[]).map(x=>String(x.file_name||'').toLowerCase()));
+    const missing=files.filter(f=>!known.has(String(f.name||'').toLowerCase()));
+    if(!missing.length){
+      box.innerHTML=`<div class="empty" style="padding:10px">Live check: ${files.length} file${files.length===1?'':'s'} in the folder, all already listed above.</div>`;
+      return;
+    }
+    box.innerHTML=`<div style="margin:8px 0;font-size:11.5px;color:var(--gray-500)">
+        <b>${missing.length}</b> file${missing.length===1?'':'s'} in Dropbox not yet in the 7am sync:</div>`
+      +missing.map(f=>`<div class="act" style="display:flex;gap:10px;align-items:center">
+        <span style="flex:0 0 18px;text-align:center">${f.is_pdf?'&#128196;':'&#128441;'}</span>
         <div style="flex:1;min-width:0">
-          <div class="nm" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name)}</div>
-          <div style="font-size:11px;color:var(--gray-400)">${f.modified?esc(relTime(f.modified)):''}${f.size?` &middot; ${fsize(f.size)}`:''}</div>
+          <div class="note" style="word-break:break-word"><b>${esc(f.name)}</b> <span class="chip">new</span></div>
+          <div style="font-size:11px;color:var(--gray-500)">${f.modified?esc(relTime(f.modified)):''}${f.size?' · '+esc(fsize(f.size)):''}</div>
         </div>
-        ${f.is_folder?'':`<button class="sm" onclick="openFile(${i})">Open</button>`}
-        ${f.is_pdf?`<button class="sm" onclick="scanValue(${i})">Scan for fee</button>`:''}
-      </div>`).join('')
-      +`<div id="scanout"></div>`;
-    window._DBXFILES=fs;
+      </div>`).join('');
   }catch(e){
-    b.innerHTML=`<div class="empty"><span class="err">${esc(e.message)}</span><br>
-      <span style="font-size:12px;color:var(--gray-400)">Is the dropbox-files function deployed with Dropbox credentials?</span></div>`;
+    box.innerHTML=`<div class="empty" style="padding:10px"><span class="err">${esc(e.message)}</span><br>
+      <span style="font-size:12px;color:var(--gray-400)">Live check needs the dropbox-files function deployed; the list above is the 7am snapshot and is unaffected.</span></div>`;
   }
 }
-async function openFile(i){
-  const f=window._DBXFILES[i];
-  try{
-    const d=await fnD({action:'link',path:f.path});
-    window.open(d.url,'_blank','noopener');
-  }catch(e){toast('Could not open file: '+e.message,true);}
+
+/* ---------------- proposal fee scan (Documents tab) ----------------
+   Scanning runs against a deal_documents row: prefer its Dropbox path, and fall
+   back to its share URL, which the edge function can download via
+   sharing/get_shared_link_file. A web_path row has neither, so its scan button
+   is not rendered at all. */
+function docScanTarget(x){
+  const path=x.dropbox_path||x.path_lower||x.path||null;
+  if(path) return {path};
+  if(x.link_kind==='shared_link'&&x.url) return {shared_url:x.url};
+  return null;
 }
-async function scanValue(i){
-  const f=window._DBXFILES[i];
+async function scanDoc(id){
+  const x=(DOCS_CACHE||[]).find(y=>y.id===id); if(!x) return;
+  const t=docScanTarget(x); if(!t) return;
   const out=document.getElementById('scanout');
   out.innerHTML='<div class="empty">Extracting text and scanning for amounts...</div>';
   try{
-    const d=await fnD({action:'value',path:f.path});
+    const d=await fnD({action:'value',...t});
     const cs=d.candidates||[];
-    if(!cs.length){out.innerHTML='<div class="empty">No dollar amounts found in this PDF.</div>';return;}
-    out.innerHTML=`<div style="margin-top:12px"><label class="lb">Amounts found in ${esc(d.file)}</label>`
-      +cs.map(c=>`<div class="act" style="display:flex;align-items:center;gap:10px">
+    const fname=d.file||x.file_name;
+    if(!cs.length){out.innerHTML='<div class="empty">No dollar amounts found in '+esc(fname)+'.</div>';return;}
+    out.innerHTML=`<div style="margin-top:12px"><label class="lb">Amounts found in ${esc(fname)}</label>`
+      +cs.map(c=>`<div class="act" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <b style="flex:0 0 auto;font-variant-numeric:tabular-nums">${money(c.amount)}</b>
-        <div style="flex:1;min-width:0;font-size:11.5px;color:var(--gray-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(c.context)}">${esc(c.context)}</div>
-        <button class="sm pri" onclick="applyValue(${c.amount},'${esc(d.file).replace(/'/g,'&#39;')}')">Use as proposal fee</button>
+        <div style="flex:1;min-width:120px;font-size:11.5px;color:var(--gray-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(c.context)}">${esc(c.context)}</div>
+        <button class="sm" onclick="applyFee('proposal_fee',${c.amount},'${esc(fname).replace(/'/g,'&#39;')}')">→ Design fee</button>
+        <button class="sm" onclick="applyFee('ca_fee',${c.amount},'${esc(fname).replace(/'/g,'&#39;')}')">→ CA fee</button>
       </div>`).join('')+'</div>';
-  }catch(e){out.innerHTML=`<div class="empty"><span class="err">${esc(e.message)}</span></div>`;}
+  }catch(e){
+    out.innerHTML=`<div class="empty"><span class="err">${esc(e.message)}</span><br>
+      <span style="font-size:12px;color:var(--gray-400)">Is the dropbox-files function deployed with Dropbox credentials?</span></div>`;
+  }
 }
-/* A scanned proposal amount is the PROPOSAL FEE in the economics model — not a
-   separate scalar. fee_source records which PDF it came from, matching the
-   "parsed from:" line the drawer already renders. */
-async function applyValue(amount,file){
+/* A scanned amount lands in the economics model — proposal_fee (design phase)
+   or ca_fee (CA phase), the caller's choice. fee_source records which PDF it
+   came from, matching the "parsed from:" line the drawer already renders. */
+async function applyFee(col,amount,file){
+  const label=col==='ca_fee'?'CA fee':'Design fee';
   try{
-    await api('deals?id=eq.'+CUR.id,{method:'PATCH',
-      body:JSON.stringify({proposal_fee:amount,fee_source:file,fee_verified_at:new Date().toISOString()})});
+    const body={[col]:amount,fee_verified_at:new Date().toISOString()};
+    if(col==='proposal_fee') body.fee_source=file;
+    await api('deals?id=eq.'+CUR.id,{method:'PATCH',body:JSON.stringify(body)});
     try{
       await api('activities',{method:'POST',
-        body:JSON.stringify({deal_id:CUR.id,kind:'note',summary:`Proposal fee set to ${money(amount)} from ${file}`})});
+        body:JSON.stringify({deal_id:CUR.id,kind:'note',summary:`${label} set to ${money(amount)} from ${file}`})});
     }catch(_){/* audit-log failure must never mask the fee write */}
-    toast('Proposal fee set to '+money(amount));
+    toast(`${label} set to ${money(amount)}`);
     await load();CUR=DEALS.find(x=>x.id===CUR.id);draw();
   }catch(e){toast('Could not set fee: '+e.message,true);}
 }
@@ -1455,12 +1535,14 @@ async function loadDocs(){
   }
   DOCS_CACHE=ds;
   const sg=ds.filter(x=>x.is_signed).length;
-  b.innerHTML=`<div style="margin-bottom:10px;font-size:12px;color:var(--gray-500)">
-      ${ds.length} document${ds.length>1?'s':''} in Dropbox${sg?` · <b style="color:#1f6581">${sg} signed</b>`:''}
+  b.innerHTML=`<div style="margin-bottom:10px;font-size:12px;color:var(--gray-500);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span>${ds.length} document${ds.length>1?'s':''} in Dropbox${sg?` · <b style="color:#1f6581">${sg} signed</b>`:''}
       ${ds.some(x=>x.link_kind==='shared_link')
         ?' · <span title="Real Dropbox share links — work for clients with no Dropbox account">client-shareable 🔗</span>'
-        :' · <span title="Opens only for signed-in Plaza Dropbox members">internal links</span>'}
-    </div>`
+        :' · <span title="Opens only for signed-in Plaza Dropbox members">internal links</span>'}</span>
+      <button class="sm" onclick="refreshDocsLive()" style="margin-left:auto"
+        title="Read the Dropbox folder live instead of the 7am snapshot">Check Dropbox now</button>
+    </div><div id="livedocs"></div>`
    +ds.map(x=>`<div class="act" style="display:flex;gap:10px;align-items:flex-start">
       <div style="flex:1;min-width:0">
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:3px">
@@ -1484,7 +1566,13 @@ async function loadDocs(){
          style="flex:0 0 auto;padding:8px 12px;min-height:36px;border:1px solid var(--line);
                 border-radius:6px;background:#fff;cursor:pointer;font-size:12.5px;
                 font-weight:600;color:var(--gray-700)">Copy</button>`:''}
-    </div>`).join('');
+      ${/\.pdf$/i.test(x.file_name||'')&&docScanTarget(x)?`<button onclick="scanDoc(${x.id})"
+         title="Extract fee amounts from this PDF"
+         style="flex:0 0 auto;padding:8px 12px;min-height:36px;border:1px solid var(--line);
+                border-radius:6px;background:#fff;cursor:pointer;font-size:12.5px;
+                font-weight:600;color:var(--gray-700)">Scan for fee</button>`:''}
+    </div>`).join('')
+   +`<div id="scanout"></div>`;
 }
 /* Copy a share link to the clipboard. Only offered for link_kind='shared_link'
    (a real Dropbox share URL that works for people outside the team); web_path

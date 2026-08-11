@@ -138,43 +138,113 @@ test('plain note does not bump last contact by default', async ({ page }) => {
   expect(captured.some((c) => c.method === 'PATCH' && c.body?.last_contact_date)).toBe(false);
 });
 
-test('Files tab lists the deal Dropbox folder', async ({ page }) => {
+test('Files tab is gone; Documents is the single Dropbox surface', async ({ page }) => {
   await stubBackend(page);
   const errors = await bootCrm(page);
   await page.locator('.card', { hasText: 'Dome Repairs' }).click();
-  await page.locator('.drawer .tab', { hasText: 'Files' }).click();
+  await expect(page.locator('.drawer .tab', { hasText: 'Files' })).toHaveCount(0);
+  await expect(page.locator('.drawer .tab', { hasText: 'Documents' })).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
+test('Documents rows offer Scan for fee on PDFs only', async ({ page }) => {
+  await stubBackend(page);
+  const errors = await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Documents' }).click();
   await expect(page.locator('.drawer .act', { hasText: 'Dome Proposal Rev2.pdf' })).toBeVisible();
-  await expect(page.locator('.drawer .act', { hasText: 'Site Photos' })).toBeVisible();
-  // folders get no Open button, PDFs get a scan button
+  // the PDF gets a scan button; the .docx row does not
   await expect(page.locator('.drawer button', { hasText: 'Scan for fee' })).toHaveCount(1);
   expect(errors).toEqual([]);
 });
 
-test('scanning a proposal PDF applies its fee as the deal value', async ({ page }) => {
+test('scanning a document routes the amount to Design or CA fee', async ({ page }) => {
   const { captured } = await stubBackend(page);
   const errors = await bootCrm(page);
   await page.locator('.card', { hasText: 'Dome Repairs' }).click();
-  await page.locator('.drawer .tab', { hasText: 'Files' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Documents' }).click();
   await page.locator('.drawer button', { hasText: 'Scan for fee' }).click();
   await expect(page.locator('#scanout')).toContainText('$52,500');
   await expect(page.locator('#scanout')).toContainText('lump sum fee');
-  await page.locator('#scanout button', { hasText: 'Use as proposal fee' }).first().click();
+  // both phase targets are offered
+  await expect(page.locator('#scanout button', { hasText: '→ Design fee' }).first()).toBeVisible();
+  await expect(page.locator('#scanout button', { hasText: '→ CA fee' }).first()).toBeVisible();
+  await page.locator('#scanout button', { hasText: '→ Design fee' }).first().click();
   await expect(page.locator('#toast')).toContainText('$52,500');
-  const patch = captured.find((c) => c.method === 'PATCH' && c.path.includes('deals?id=eq.1') && c.body?.proposal_fee === 52500);
+  const patch = captured.find((c) => c.method === 'PATCH' && c.body?.proposal_fee === 52500);
   expect(patch).toBeTruthy();
   expect(patch.body.fee_source).toBe('Dome Proposal Rev2.pdf');
   expect(patch.body.fee_verified_at).toBeTruthy();
-  // drawer refreshes with the new amount
   await expect(page.locator('#edFee')).toHaveValue('52500');
   expect(errors).toEqual([]);
 });
 
-test('Files tab explains itself when no folder is linked', async ({ page }) => {
+test('scanning can route an amount to the CA phase instead', async ({ page }) => {
+  const { captured } = await stubBackend(page);
+  await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Documents' }).click();
+  await page.locator('.drawer button', { hasText: 'Scan for fee' }).click();
+  await page.locator('#scanout button', { hasText: '→ CA fee' }).first().click();
+  const patch = captured.find((c) => c.method === 'PATCH' && c.body?.ca_fee === 52500);
+  expect(patch).toBeTruthy();
+  // fee_source describes the proposal fee, so a CA write must not claim it
+  expect(patch.body.fee_source).toBeUndefined();
+});
+
+test('live Dropbox check flags files missing from the 7am snapshot', async ({ page }) => {
+  await stubBackend(page);
+  const errors = await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Documents' }).click();
+  await page.locator('.drawer button', { hasText: 'Check Dropbox now' }).click();
+  // stub folder holds the known proposal plus one newer file
+  await expect(page.locator('#livedocs')).toContainText('not yet in the 7am sync');
+  await expect(page.locator('#livedocs')).toContainText('Dome Proposal Rev3.pdf');
+  expect(errors).toEqual([]);
+});
+
+test('live check degrades gracefully when the function is unavailable', async ({ page }) => {
+  await stubBackend(page, { dropboxDown: true });
+  await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Documents' }).click();
+  await page.locator('.drawer button', { hasText: 'Check Dropbox now' }).click();
+  await expect(page.locator('#livedocs')).toContainText('needs the dropbox-files function deployed');
+  // the snapshot list must survive a failed live check
+  await expect(page.locator('.drawer .act', { hasText: 'Dome Proposal Rev2.pdf' })).toBeVisible();
+});
+
+test('value splits into Design and CA phases', async ({ page }) => {
+  await stubBackend(page);
+  const errors = await bootCrm(page);
+  // Dome: 48,000 design fee + 6,000 CA
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  const econ = page.locator('.drawer .callout', { hasText: 'Deal economics' });
+  await expect(econ).toContainText('$48,000');
+  await expect(econ).toContainText('$6,000');
+  await expect(econ).toContainText('$54,000');
+  await page.locator('.drawer .x').click();
+  // table view carries Design / CA / Value columns
+  await page.locator('#nav a[data-v="deals"]').click();
+  const head = page.locator('#view thead');
+  await expect(head).toContainText('Design');
+  await expect(head).toContainText('CA');
+  // forecast splits by phase too
+  await page.locator('#nav a[data-v="forecast"]').click();
+  await expect(page.locator('#view thead')).toContainText('Design');
+  expect(errors).toEqual([]);
+});
+
+test('recurring CA rate x term lands in the CA phase, not Design', async ({ page }) => {
   await stubBackend(page);
   await bootCrm(page);
-  await page.locator('.card', { hasText: 'Terrazas Facade' }).click();
-  await page.locator('.drawer .tab', { hasText: 'Files' }).click();
-  await expect(page.locator('#tabbody')).toContainText('No Dropbox folder linked');
+  // North Bay: 50,000 design + (1,500/mo x 10mo) = 15,000 CA
+  await page.locator('.card', { hasText: 'North Bay Villas' }).click();
+  const econ = page.locator('.drawer .callout', { hasText: 'Deal economics' });
+  await expect(econ).toContainText('$50,000');
+  await expect(econ).toContainText('$15,000');
+  await expect(econ).toContainText('$65,000');
 });
 
 test('mobile viewport: burger nav present, board scrolls', async ({ page }) => {

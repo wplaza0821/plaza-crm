@@ -86,6 +86,21 @@ async function dbxDownload(path: string): Promise<Uint8Array> {
   return new Uint8Array(await r.arrayBuffer());
 }
 
+/* deal_documents rows may carry only a share URL (the 7am sync stores
+   /scl/fi/ links), so scanning must work from a shared link too. */
+async function dbxDownloadShared(url: string): Promise<Uint8Array> {
+  const t = await dropboxToken();
+  const r = await fetch("https://content.dropboxapi.com/2/sharing/get_shared_link_file", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${t}`,
+      "Dropbox-API-Arg": JSON.stringify({ url }),
+    },
+  });
+  if (!r.ok) throw new Error(`Dropbox shared-link download failed (${r.status})`);
+  return new Uint8Array(await r.arrayBuffer());
+}
+
 async function listFolder(path: string) {
   const out: any[] = [];
   let d = await dbx("files/list_folder", { path, limit: 200 });
@@ -160,12 +175,17 @@ Deno.serve(async (req) => {
       return json({ url: d.link });
     }
     if (body.action === "value") {
-      if (!body.path) return json({ error: "path required" }, 400);
-      const bytes = await dbxDownload(String(body.path));
+      if (!body.path && !body.shared_url) return json({ error: "path or shared_url required" }, 400);
+      const bytes = body.path
+        ? await dbxDownload(String(body.path))
+        : await dbxDownloadShared(String(body.shared_url));
+      const name = body.path
+        ? String(body.path).split("/").pop()
+        : decodeURIComponent(String(body.shared_url).split("?")[0].split("/").pop() || "document");
       const pdf = await getDocumentProxy(bytes);
       const { text } = await extractText(pdf, { mergePages: true });
       const candidates = findAmounts(String(text || ""));
-      return json({ file: String(body.path).split("/").pop(), candidates });
+      return json({ file: name, candidates });
     }
     return json({ error: "Unknown action" }, 400);
   } catch (e) {
