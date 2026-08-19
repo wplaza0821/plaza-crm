@@ -7,7 +7,7 @@ test('boots from stored session: KPIs, board, nav counts', async ({ page }) => {
   await stubBackend(page);
   const errors = await bootCrm(page);
   await expect(page.locator('.kpi')).toHaveCount(4);
-  await expect(page.locator('.board .col')).toHaveCount(9);
+  await expect(page.locator('.board .col')).toHaveCount(8);
   await expect(page.locator('.card', { hasText: 'Dome Repairs' })).toBeVisible();
   await expect(page.locator('#c-pipeline')).toHaveText('3');
   expect(errors).toEqual([]);
@@ -31,14 +31,14 @@ test('creates a deal from the New deal form', async ({ page }) => {
   await page.locator('#dfName').fill('Test Tower Assessment');
   await page.locator('#dfClient').fill('Test Tower Assn');
   await page.locator('#dfFee').fill('25000');
-  await page.locator('#dfStage').selectOption('RFP Received');
+  await page.locator('#dfStage').selectOption('Negotiation');
   await page.locator('.drawer button.pri', { hasText: 'Create deal' }).click();
   await expect(page.locator('#toast')).toHaveText('Deal created');
   const post = captured.find((c) => c.method === 'POST' && c.path.startsWith('/rest/v1/deals'));
   expect(post).toBeTruthy();
   expect(post.body.name).toBe('Test Tower Assessment');
   expect(post.body.proposal_fee).toBe(25000);
-  expect(post.body.stage).toBe('RFP Received');
+  expect(post.body.stage).toBe('Negotiation');
   // audit trail row for the create
   expect(captured.some((c) => c.path.startsWith('/rest/v1/activities') && c.body?.kind === 'created')).toBe(true);
   // drawer stays open on the new record's Edit tab; board shows the new card
@@ -291,6 +291,35 @@ test('send status degrades to a notice when Graph is unavailable', async ({ page
   // documents still list, and an unverifiable send status must not block scanning
   await expect(page.locator('.drawer .act', { hasText: 'Dome Proposal Rev2.pdf' })).toBeVisible();
   await expect(page.locator('.drawer button', { hasText: 'Scan blocked' })).toHaveCount(0);
+});
+
+test('RFP Received is gone from the pipeline', async ({ page }) => {
+  await stubBackend(page);
+  const errors = await bootCrm(page);
+  await expect(page.locator('.board .col')).toHaveCount(8);
+  await expect(page.locator('.board .col-h .t', { hasText: 'RFP Received' })).toHaveCount(0);
+  // and it is not offerable on a new deal
+  await page.locator('#ndBtn').click();
+  const opts = await page.locator('#dfStage option').allTextContents();
+  expect(opts.some((o) => o.includes('RFP Received'))).toBe(false);
+  expect(errors).toEqual([]);
+});
+
+test('a deal stranded in a retired stage stays visible and keeps its stage', async ({ page }) => {
+  const { captured } = await stubBackend(page, { strandedStage: 'RFP Received' });
+  const errors = await bootCrm(page);
+  // the retired column reappears only because a deal is still in it
+  const col = page.locator('.board .col', { has: page.locator('.col-h .t', { hasText: 'RFP Received' }) });
+  await expect(col).toBeVisible();
+  await expect(col.locator('.card', { hasText: 'Terrazas Facade' })).toBeVisible();
+  // saving an unrelated field must not silently reassign the stage
+  await page.locator('.card', { hasText: 'Terrazas Facade' }).click();
+  await expect(page.locator('#edStage')).toHaveValue('RFP Received');
+  await page.locator('.drawer button', { hasText: 'Save' }).first().click();
+  await expect.poll(() => captured.some((c) => c.method === 'PATCH' && c.body?.stage)).toBe(true);
+  const patch = captured.find((c) => c.method === 'PATCH' && c.body?.stage);
+  expect(patch.body.stage).toBe('RFP Received');
+  expect(errors).toEqual([]);
 });
 
 test('mobile viewport: burger nav present, board scrolls', async ({ page }) => {

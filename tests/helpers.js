@@ -65,6 +65,8 @@ function fixtureDocs() {
 // opts.dropboxDown simulates the edge function not being deployed.
 async function stubBackend(page, opts = {}) {
   const state = { deals: fixtureDeals(), docs: fixtureDocs(), activities: [], nextId: 100 };
+  // opts.strandedStage leaves a deal in a stage that has been retired
+  if (opts.strandedStage) state.deals[1].stage = opts.strandedStage;
   const captured = [];
   const json = (route, body, status = 200) =>
     route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
