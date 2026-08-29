@@ -447,6 +447,17 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
 .col.dropover{outline:2px dashed var(--accent);outline-offset:-2px}
 .col.dropover .col-b{background:var(--accent-bg)}
 
+/* ---------- danger zone (delete deal) ---------- */
+.danger{margin-top:22px;padding:14px;border:1px solid #f0cfcf;border-radius:var(--radius);
+  background:#fdf5f5}
+.danger b{color:var(--red);font-size:13px}
+.dz-note{font-size:11.5px;color:var(--gray-500);margin:5px 0 10px;line-height:1.5}
+.dz-btn{background:#fff;border:1px solid var(--red);color:var(--red);font-weight:600}
+.dz-btn:hover:not(:disabled){background:var(--red);color:#fff}
+.dz-btn:disabled{opacity:.45;cursor:not-allowed}
+.dz-confirm{margin-top:4px}
+.dz-confirm input{width:100%;margin-bottom:8px}
+
 /* ---------- toast ---------- */
 #toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);
   background:var(--black);color:#FFFFFF;padding:10px 18px;border-radius:var(--radius);
@@ -1222,10 +1233,61 @@ async function saveDealForm(id){
   }catch(e){st.innerHTML='<span class="err">'+esc(e.message)+'</span>';}
 }
 function loadEdit(){
+  const d=CUR;
   document.getElementById('tabbody').innerHTML=
-    dealFormHTML(CUR,false)+
-    `<div class="fl"><button class="pri" onclick="saveDealForm(${CUR.id})">Save changes</button><span id="dfst"></span></div>
-     <div style="margin-top:8px;font-size:11.5px;color:var(--gray-400)">Fees live in the Deal economics block above.</div>`;
+    dealFormHTML(d,false)+
+    `<div class="fl"><button class="pri" onclick="saveDealForm(${d.id})">Save changes</button><span id="dfst"></span></div>
+     <div style="margin-top:8px;font-size:11.5px;color:var(--gray-400)">Fees live in the Deal economics block above.</div>
+     <div class="danger" id="dangerZone">
+       <b>Delete this deal</b>
+       <div class="dz-note">Permanent. Removes the deal, its activity history, and its
+         document links. Dropbox files themselves are not touched.<br>
+         For work that simply did not happen, move it to <b>Lost</b> or <b>Stale</b> instead —
+         that keeps it out of the pipeline but preserves the history.</div>
+       <button class="dz-btn" onclick="askDeleteDeal()" id="dzStart">Delete deal</button>
+       <div id="dzConfirm"></div>
+     </div>`;
+}
+/* Deleting is irreversible and there is no undo, so it takes a typed
+   confirmation of the deal name — the same guard GitHub uses for repo
+   deletion. A stray click can never destroy a record. */
+function askDeleteDeal(){
+  const d=CUR;
+  document.getElementById('dzStart').style.display='none';
+  document.getElementById('dzConfirm').innerHTML=`
+    <div class="dz-confirm">
+      <label class="lb">Type <b>${esc(d.name)}</b> to confirm</label>
+      <input id="dzName" autocomplete="off" placeholder="${esc(d.name)}">
+      <div class="fl">
+        <button class="dz-btn" id="dzGo" onclick="deleteDeal(${d.id})" disabled>Delete permanently</button>
+        <button onclick="loadEdit()">Cancel</button>
+        <span id="dzst"></span>
+      </div>
+    </div>`;
+  const inp=document.getElementById('dzName'), go=document.getElementById('dzGo');
+  inp.oninput=()=>{go.disabled=inp.value.trim()!==d.name;};
+  inp.focus();
+}
+async function deleteDeal(id){
+  const d=DEALS.find(x=>x.id===id); if(!d) return;
+  const st=document.getElementById('dzst'); st.textContent='Deleting...';
+  const go=document.getElementById('dzGo'); if(go) go.disabled=true;
+  try{
+    /* Children first: activities and deal_documents both reference deals(id),
+       so without ON DELETE CASCADE the deal row cannot go while they exist.
+       deal_documents is rebuilt by the 7am sync, and with the deal gone it has
+       nothing to re-attach to. */
+    await api('activities?deal_id=eq.'+id,{method:'DELETE'});
+    try{ await api('deal_documents?deal_id=eq.'+id,{method:'DELETE'}); }
+    catch(e){ /* table may not exist yet in some environments — not fatal */ }
+    await api('deals?id=eq.'+id,{method:'DELETE'});
+    toast('Deleted '+d.name);
+    closeDrawer();
+    await load();
+  }catch(e){
+    st.innerHTML='<span class="err">'+esc(e.message)+'</span>';
+    if(go) go.disabled=false;
+  }
 }
 
 /* ---------- sent-mail cross-reference ----------

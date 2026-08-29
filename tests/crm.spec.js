@@ -322,6 +322,71 @@ test('a deal stranded in a retired stage stays visible and keeps its stage', asy
   expect(errors).toEqual([]);
 });
 
+test('delete requires typing the deal name', async ({ page }) => {
+  const { captured } = await stubBackend(page);
+  const errors = await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Edit' }).click();
+  await page.locator('#dzStart').click();
+  const go = page.locator('#dzGo');
+  await expect(go).toBeDisabled();
+  await page.locator('#dzName').fill('Dome Repair');   // one char short
+  await expect(go).toBeDisabled();
+  await page.locator('#dzName').fill('Dome Repairs');
+  await expect(go).toBeEnabled();
+  // nothing destructive has been sent while confirming
+  expect(captured.some((c) => c.method === 'DELETE')).toBe(false);
+  expect(errors).toEqual([]);
+});
+
+test('deleting removes the deal and its children, then refreshes the board', async ({ page }) => {
+  const { captured, state } = await stubBackend(page);
+  const errors = await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Edit' }).click();
+  await page.locator('#dzStart').click();
+  await page.locator('#dzName').fill('Dome Repairs');
+  await page.locator('#dzGo').click();
+  await expect(page.locator('#toast')).toContainText('Deleted Dome Repairs');
+  // children go first, then the deal itself
+  const dels = captured.filter((c) => c.method === 'DELETE').map((c) => c.path);
+  expect(dels.some((p) => p.startsWith('/rest/v1/activities'))).toBe(true);
+  expect(dels.some((p) => p.startsWith('/rest/v1/deal_documents'))).toBe(true);
+  expect(dels[dels.length - 1]).toContain('/rest/v1/deals?id=eq.1');
+  expect(state.deals.some((d) => d.id === 1)).toBe(false);
+  // drawer closes and the card is gone from the board
+  await expect(page.locator('.drawer')).not.toHaveClass(/\bon\b/);
+  await expect(page.locator('.card', { hasText: 'Dome Repairs' })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('cancel leaves the deal untouched', async ({ page }) => {
+  const { captured } = await stubBackend(page);
+  await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Edit' }).click();
+  await page.locator('#dzStart').click();
+  await page.locator('#dzName').fill('Dome Repairs');
+  await page.locator('.drawer button', { hasText: 'Cancel' }).click();
+  await expect(page.locator('#dzStart')).toBeVisible();
+  expect(captured.some((c) => c.method === 'DELETE')).toBe(false);
+});
+
+test('a failed delete surfaces the error and keeps the deal', async ({ page }) => {
+  await stubBackend(page, { blockDelete: true });
+  await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Edit' }).click();
+  await page.locator('#dzStart').click();
+  await page.locator('#dzName').fill('Dome Repairs');
+  await page.locator('#dzGo').click();
+  await expect(page.locator('#dzst')).toContainText('foreign key constraint');
+  // the drawer stays open and the deal is still on the board
+  await expect(page.locator('#dzGo')).toBeEnabled();
+  await page.locator('.drawer .x').click();
+  await expect(page.locator('.card', { hasText: 'Dome Repairs' })).toBeVisible();
+});
+
 test('mobile viewport: burger nav present, board scrolls', async ({ page }) => {
   await stubBackend(page);
   const errors = await bootCrm(page, { viewport: { width: 390, height: 844 } });

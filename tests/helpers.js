@@ -132,6 +132,10 @@ async function stubBackend(page, opts = {}) {
     }
     if (url.pathname.startsWith('/rest/v1/deal_documents')) {
       const m = url.search.match(/deal_id=eq\.(\d+)/);
+      if (method === 'DELETE') {
+        state.docs = state.docs.filter((d) => m && d.deal_id !== +m[1]);
+        return json(route, []);
+      }
       return json(route, state.docs.filter((d) => !m || d.deal_id === +m[1]));
     }
     if (url.pathname.startsWith('/rest/v1/deal_primary_doc')) {
@@ -160,6 +164,12 @@ async function stubBackend(page, opts = {}) {
         if (d) Object.assign(d, body);
         return json(route, d ? [d] : []);
       }
+      if (method === 'DELETE' && idMatch) {
+        // a real FK would block this while children remain
+        if (opts.blockDelete) return json(route, { message: 'update or delete on table "deals" violates foreign key constraint' }, 409);
+        state.deals = state.deals.filter((x) => x.id !== +idMatch[1]);
+        return json(route, []);
+      }
     }
     if (url.pathname.startsWith('/rest/v1/activities')) {
       if (method === 'GET') {
@@ -170,6 +180,11 @@ async function stubBackend(page, opts = {}) {
         const row = { ...body, id: state.nextId++, occurred_at: new Date().toISOString() };
         state.activities.push(row);
         return json(route, [row], 201);
+      }
+      if (method === 'DELETE') {
+        const m = url.search.match(/deal_id=eq\.(\d+)/);
+        state.activities = state.activities.filter((a) => m && a.deal_id !== +m[1]);
+        return json(route, []);
       }
     }
     return json(route, []);
