@@ -564,20 +564,20 @@ let DOCS_CACHE=[];
 let CLIENT_ONLY=true;
 let SORT={k:'project_no',dir:1}, FSTAGE='', FPRI='';
 
-const STAGES=["Lead","Proposal Sent","Negotiation","Won-Pending Payment","Won","On Hold","Stale","Lost"];
-const OPEN=["Lead","Proposal Sent","Negotiation","Won-Pending Payment"];
+const STAGES=["Lead","Proposal Sent","Negotiation","Won","On Hold","Stale","Lost"];
+const OPEN=["Lead","Proposal Sent","Negotiation"];
 /* Stages removed from the pipeline. A retired stage is NOT deleted from the
    data, so any deal still sitting in one must stay visible: boardCols() appends
    a column for it, the filter lists it, and the drawer keeps it selectable.
    Once no deal carries it the column stops appearing on its own. */
-const RETIRED_STAGES=["RFP Received"];
+const RETIRED_STAGES=["RFP Received","Won-Pending Payment"];
 const liveRetired=()=>RETIRED_STAGES.filter(s=>DEALS.some(d=>d.stage===s));
 const boardCols=()=>COLS.concat(liveRetired());
 const stageOptions=cur=>STAGES.concat(
   (cur&&!STAGES.includes(cur))?[cur]:[]).concat(
   liveRetired().filter(s=>s!==cur));
 /* Kanban columns mirror the real sales motion, left -> right */
-const COLS=["Lead","Proposal Sent","Negotiation","Won-Pending Payment","Won","On Hold","Stale","Lost"];
+const COLS=["Lead","Proposal Sent","Negotiation","Won","On Hold","Stale","Lost"];
 
 const esc=s=>(s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money=v=>v?'$'+Number(v).toLocaleString():'';
@@ -718,6 +718,16 @@ function dealParts(d){
 const sumParts=list=>list.reduce((a,d)=>{const p=dealParts(d);
   a.design+=p.design;a.ca+=p.ca;a.unsplit+=p.unsplit;a.total+=p.total;return a;},
   {design:0,ca:0,unsplit:0,total:0});
+/* A/R is derived from billing, NOT from a pipeline stage. It used to be the
+   'Won-Pending Payment' stage, which forced one deal to be either won or paid
+   but never both — and put the same dollars in open pipeline, Won and A/R at
+   once (see kpis()). Outstanding = contract value minus what QuickBooks billed.
+   A won deal with no billed_to_date has been invoiced for nothing, so it is
+   fully outstanding; arUnbilled() counts those so the KPI can disclose how much
+   of the figure rests on a missing number rather than a recorded partial. */
+const outstanding=d=>Math.max(0,dealValue(d)-(+d.billed_to_date||0));
+const isAR=d=>d.stage==='Won'&&outstanding(d)>0;
+const arUnbilled=list=>list.filter(d=>d.billed_to_date==null).length;
 /* "$120,000 design · $18,000 CA" — omits a phase that is zero. */
 function phaseLine(p){
   const bits=[];
@@ -774,7 +784,7 @@ function paint(){
   document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===VIEW));
   const open=DEALS.filter(d=>d.is_open);
   const od=open.filter(d=>d.overdue);
-  const ar=DEALS.filter(d=>d.stage==='Won-Pending Payment');
+  const ar=DEALS.filter(isAR);
   const cs=new Set(DEALS.map(d=>d.contact_email).filter(Boolean));
   const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
   set('c-pipeline',DEALS.length); set('c-deals',DEALS.length);
@@ -782,16 +792,21 @@ function paint(){
   kpis(); toolbar(); renderView();
 }
 function kpis(){
-  // Stage sets must be DISJOINT. Previously `stage.startsWith('Won')` also
-  // matched 'Won-Pending Payment', which is ALSO in OPEN and ALSO in A/R — so
-  // the same dollars were counted three times and adding the two headline KPIs
-  // double-counted them. Match against explicit lists instead of a prefix.
+  // Open and Won must stay DISJOINT: 'Won-Pending Payment' used to sit in OPEN
+  // while `stage.startsWith('Won')` matched it too, so the same dollars landed
+  // in both headline KPIs and adding them double-counted. Keep matching explicit
+  // lists, never a prefix.
+  // A/R is deliberately NOT disjoint from Won — it is the unbilled slice of the
+  // very same deals. It measures a different quantity (dollars outstanding, not
+  // contract value), so it must never be summed with Won.
   const WON_CLOSED=['Won'];
   const open=DEALS.filter(d=>d.is_open), won=DEALS.filter(d=>WON_CLOSED.includes(d.stage));
   const od=open.filter(d=>d.overdue);
   const openP=sumParts(open), wonP=sumParts(won);
   const openVal=openP.total, wonVal=wonP.total;
-  const ar=DEALS.filter(d=>d.stage==='Won-Pending Payment').reduce((a,b)=>a+dealValue(b),0);
+  const arDeals=DEALS.filter(isAR);
+  const ar=arDeals.reduce((a,d)=>a+outstanding(d),0);
+  const arNever=arUnbilled(arDeals);
   document.getElementById('kpis').innerHTML=`
    <div class="kpi"><small>Open pipeline</small><b>${money(openVal)||'$0'}</b>
      <div class="sub">${open.length} active deals</div>
@@ -803,7 +818,8 @@ function kpis(){
      <b style="color:${od.length?'var(--red)':'var(--black)'}">${od.length}</b>
      <div class="sub">14+ days no contact</div></div>
    <div class="kpi"><small>A/R pending</small><b>${money(ar)||'$0'}</b>
-     <div class="sub">Won, awaiting payment</div></div>`;
+     <div class="sub">${arDeals.length} won deal${arDeals.length===1?'':'s'} unbilled</div>
+     <div class="sub">${arNever?arNever+' never invoiced':'&mdash;'}</div></div>`;
 }
 function toolbar(){
   const b=document.getElementById('bar');
@@ -842,7 +858,7 @@ function rows(){
     if(FSTAGE&&d.stage!==FSTAGE)return false;
     if(FPRI&&d.priority!==FPRI)return false;
     if(VIEW==='tasks'&&!d.overdue)return false;
-    if(VIEW==='ar'&&d.stage!=='Won-Pending Payment')return false;
+    if(VIEW==='ar'&&!isAR(d))return false;
     return true;});
 }
 function renderView(){

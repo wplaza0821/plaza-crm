@@ -7,7 +7,7 @@ test('boots from stored session: KPIs, board, nav counts', async ({ page }) => {
   await stubBackend(page);
   const errors = await bootCrm(page);
   await expect(page.locator('.kpi')).toHaveCount(4);
-  await expect(page.locator('.board .col')).toHaveCount(8);
+  await expect(page.locator('.board .col')).toHaveCount(7);
   await expect(page.locator('.card', { hasText: 'Dome Repairs' })).toBeVisible();
   await expect(page.locator('#c-pipeline')).toHaveText('3');
   expect(errors).toEqual([]);
@@ -296,7 +296,7 @@ test('send status degrades to a notice when Graph is unavailable', async ({ page
 test('RFP Received is gone from the pipeline', async ({ page }) => {
   await stubBackend(page);
   const errors = await bootCrm(page);
-  await expect(page.locator('.board .col')).toHaveCount(8);
+  await expect(page.locator('.board .col')).toHaveCount(7);
   await expect(page.locator('.board .col-h .t', { hasText: 'RFP Received' })).toHaveCount(0);
   // and it is not offerable on a new deal
   await page.locator('#ndBtn').click();
@@ -385,6 +385,45 @@ test('a failed delete surfaces the error and keeps the deal', async ({ page }) =
   await expect(page.locator('#dzGo')).toBeEnabled();
   await page.locator('.drawer .x').click();
   await expect(page.locator('.card', { hasText: 'Dome Repairs' })).toBeVisible();
+});
+
+test('Won-Pending Payment is gone from the pipeline', async ({ page }) => {
+  await stubBackend(page);
+  const errors = await bootCrm(page);
+  await expect(page.locator('.board .col-h .t', { hasText: 'Won-Pending Payment' })).toHaveCount(0);
+  await page.locator('#ndBtn').click();
+  const opts = await page.locator('#dfStage option').allTextContents();
+  expect(opts.some((o) => o.includes('Won-Pending Payment'))).toBe(false);
+  expect(errors).toEqual([]);
+});
+
+test('A/R is derived from billing, not from a stage', async ({ page }) => {
+  await stubBackend(page);
+  const errors = await bootCrm(page);
+  // North Bay Villas is Won with 25000 of 65000 invoiced -> 40000 outstanding
+  await expect(page.locator('#c-ar')).toHaveText('1');
+  const ar = page.locator('.kpi', { hasText: 'A/R pending' });
+  await expect(ar).toContainText('$40,000');
+  await expect(ar).toContainText('1 won deal unbilled');
+  // it is Won, so it must also count toward Won 2026 at its FULL value —
+  // A/R measures the unbilled slice and must never be netted off Won
+  await expect(page.locator('.kpi', { hasText: 'Won 2026' })).toContainText('$65,000');
+  await page.locator('#nav a[data-v="ar"]').click();
+  await expect(page.locator('td', { hasText: 'North Bay Villas' })).toBeVisible();
+  await expect(page.locator('td', { hasText: 'Dome Repairs' })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('a fully billed won deal leaves A/R but keeps its stage', async ({ page }) => {
+  await stubBackend(page, { paidInFull: true });
+  const errors = await bootCrm(page);
+  await expect(page.locator('#c-ar')).toHaveText('0');
+  await expect(page.locator('.kpi', { hasText: 'A/R pending' })).toContainText('$0');
+  // still Won, still on the board, still counted in Won 2026
+  await expect(page.locator('.kpi', { hasText: 'Won 2026' })).toContainText('$65,000');
+  const won = page.locator('.board .col', { has: page.locator('.col-h .t', { hasText: 'Won' }) });
+  await expect(won.locator('.card', { hasText: 'North Bay Villas' })).toBeVisible();
+  expect(errors).toEqual([]);
 });
 
 test('mobile viewport: burger nav present, board scrolls', async ({ page }) => {
