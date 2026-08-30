@@ -34,10 +34,12 @@ function fixtureDeals() {
       id: 3, name: 'North Bay Villas', client: 'NBV Assn', project_no: '26-103',
       contact_name: 'Lee Prez', contact_email: 'prez@nbv.com',
       proposal_fee: 50000, options_nte: null, rate: 1500, rate_unit: 'month',
-      term_months: 10, ca_fee: null, billed_to_date: null, fee_source: null,
-      amount: null, stage: 'Won-Pending Payment', priority: 'LOW',
+      // Won and part-billed: contract value 50000 + 1500x10 = 65000, of which
+      // 25000 is invoiced, so 40000 is outstanding and it belongs in A/R.
+      term_months: 10, ca_fee: null, billed_to_date: 25000, fee_source: null,
+      amount: null, stage: 'Won', priority: 'LOW',
       proposal_sent_date: daysAgo(60), last_contact_date: daysAgo(5),
-      next_action: 'Invoice', next_action_due: null,
+      next_action: 'Invoice balance', next_action_due: null,
       keywords: ['north bay'], dropbox_folder: null, evidence: null,
     },
   ];
@@ -67,6 +69,9 @@ async function stubBackend(page, opts = {}) {
   const state = { deals: fixtureDeals(), docs: fixtureDocs(), activities: [], nextId: 100 };
   // opts.strandedStage leaves a deal in a stage that has been retired
   if (opts.strandedStage) state.deals[1].stage = opts.strandedStage;
+  // opts.paidInFull bills the won deal to its full contract value, which should
+  // drop it out of A/R without changing its stage.
+  if (opts.paidInFull) state.deals[2].billed_to_date = 65000;
   const captured = [];
   const json = (route, body, status = 200) =>
     route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
