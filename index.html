@@ -807,6 +807,28 @@ const sumParts=list=>list.reduce((a,d)=>{const p=dealParts(d);
 const openBalance=d=>+d.qb_open_balance||0;
 const isAR=d=>d.stage==='Won'&&openBalance(d)>0;
 const unreconciled=list=>list.filter(d=>d.qb_synced_at==null).length;
+/* QuickBooks gives one open balance per deal, never per phase — invoices
+   aren't tagged Design vs CA. So the A/R phase split is necessarily an
+   estimate: the balance prorated by the same design/ca shares as the
+   contract value. A deal with no phase data at all (legacy `amount` only)
+   puts its whole balance in `unsplit` rather than guessing. */
+function arParts(d){
+  const bal=openBalance(d);
+  if(!bal) return {design:0,ca:0,unsplit:0,total:0};
+  const p=dealParts(d);
+  if(!p.total) return {design:0,ca:0,unsplit:bal,total:bal};
+  /* round to whole dollars — money() doesn't, and the proration otherwise
+     prints "$19,230.769"; unsplit absorbs the rounding so total stays exact */
+  const design=Math.round(bal*p.design/p.total), ca=Math.round(bal*p.ca/p.total);
+  return {design,ca,unsplit:bal-design-ca,total:bal};
+}
+const sumArParts=list=>list.reduce((a,d)=>{const p=arParts(d);
+  a.design+=p.design;a.ca+=p.ca;a.unsplit+=p.unsplit;a.total+=p.total;return a;},
+  {design:0,ca:0,unsplit:0,total:0});
+/* Design/CA/Value columns mean "contract value" everywhere except the A/R
+   report, where they must mean "balance due" instead — otherwise a
+   partially-collected deal shows figures nobody can actually invoice for. */
+const dealOrArParts=d=>VIEW==='ar'?arParts(d):dealParts(d);
 /* "$120,000 design · $18,000 CA" — omits a phase that is zero. */
 function phaseLine(p){
   const bits=[];
@@ -886,6 +908,7 @@ function kpis(){
   const openVal=openP.total, wonVal=wonP.total;
   const arDeals=DEALS.filter(isAR);
   const ar=arDeals.reduce((a,d)=>a+openBalance(d),0);
+  const arP=sumArParts(arDeals);
   const arNever=unreconciled(won);
   document.getElementById('kpis').innerHTML=`
    <div class="kpi"><small>Open pipeline</small><b>${money(openVal)||'$0'}</b>
@@ -899,6 +922,7 @@ function kpis(){
      <div class="sub">14+ days no contact</div></div>
    <div class="kpi"><small>A/R pending</small><b>${money(ar)||'$0'}</b>
      <div class="sub">${arDeals.length} invoiced, awaiting payment</div>
+     <div class="sub">${phaseLine(arP)||'&mdash;'}</div>
      <div class="sub">${arNever?arNever+' won deal'+(arNever===1?'':'s')+' not yet in QB':'&mdash;'}</div></div>`;
 }
 function toolbar(){
@@ -989,7 +1013,7 @@ function cardHTML(d){
 const COLDEF=[['project_no','Project'],['name','Deal'],['stage','Stage'],['priority','Priority'],
   ['design','Design'],['ca','CA'],['value','Value'],
   ['days_since_contact','Last contact'],['next_action','Next action']];
-const COMPUTED={design:d=>dealParts(d).design, ca:d=>dealParts(d).ca, value:d=>dealParts(d).total};
+const COMPUTED={design:d=>dealOrArParts(d).design, ca:d=>dealOrArParts(d).ca, value:d=>dealOrArParts(d).total};
 function table(v,r){
   const dir=SORT.dir, k=SORT.k;
   const sorted=[...r].sort((a,b)=>{
@@ -999,11 +1023,11 @@ function table(v,r){
     return String(x==null?'':x).localeCompare(String(y==null?'':y))*dir;});
   let h='<div class="tbl-wrap"><table><thead><tr>';
   for(const [key,lbl] of COLDEF)
-    h+=`<th onclick="sortBy('${key}')">${lbl}${SORT.k===key?(dir>0?' &#9650;':' &#9660;'):''}</th>`;
+    h+=`<th onclick="sortBy('${key}')">${key==='value'&&VIEW==='ar'?'Balance due':lbl}${SORT.k===key?(dir>0?' &#9650;':' &#9660;'):''}</th>`;
   h+='</tr></thead><tbody>';
   if(!sorted.length) h+=`<tr><td colspan="${COLDEF.length}"><div class="empty">No deals match.</div></td></tr>`;
   for(const d of sorted){
-    const p=dealParts(d);
+    const p=dealOrArParts(d);
     h+=`<tr class="${CUR&&CUR.id===d.id?'sel':''}" onclick="open_(${d.id})">
       <td><span class="pill pn">${esc(d.project_no||'—')}</span></td>
       <td><div class="nm">${esc(d.name)}</div><div class="cl">${esc(d.client||'')}</div></td>
@@ -1016,7 +1040,7 @@ function table(v,r){
       <td style="max-width:280px;font-size:12px;color:var(--gray-500)">${esc((d.next_action||'—').slice(0,90))}</td></tr>`;
   }
   /* totals row so the phase split reads as a column sum, not just per-deal */
-  const tp=sumParts(sorted);
+  const tp=VIEW==='ar'?sumArParts(sorted):sumParts(sorted);
   h+=`<tr style="background:var(--gray-50)">
       <td colspan="4"><b>Total (${sorted.length})</b></td>
       <td class="num"><b>${money(tp.design)||'—'}</b></td>
