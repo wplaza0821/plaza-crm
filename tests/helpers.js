@@ -25,7 +25,7 @@ function fixtureDeals() {
       contact_name: 'Pat Manager', contact_email: 'pm@terrazas.com',
       proposal_fee: 120000, options_nte: null, rate: null, rate_unit: null,
       term_months: null, ca_fee: null, billed_to_date: null, fee_source: null,
-      amount: null, stage: 'Lead', priority: 'MEDIUM',
+      amount: null, stage: 'Proposal Sent', priority: 'MEDIUM',
       proposal_sent_date: null, last_contact_date: daysAgo(2),
       next_action: null, next_action_due: null,
       keywords: ['terrazas'], dropbox_folder: null, evidence: null,
@@ -34,9 +34,11 @@ function fixtureDeals() {
       id: 3, name: 'North Bay Villas', client: 'NBV Assn', project_no: '26-103',
       contact_name: 'Lee Prez', contact_email: 'prez@nbv.com',
       proposal_fee: 50000, options_nte: null, rate: 1500, rate_unit: 'month',
-      // Won and part-billed: contract value 50000 + 1500x10 = 65000, of which
-      // 25000 is invoiced, so 40000 is outstanding and it belongs in A/R.
+      // Won, contract value 50000 + 1500x10 = 65000. QuickBooks says 25000 has
+      // been invoiced and all 25000 is still open, so A/R is 25000 — NOT the
+      // 40000 of unbilled backlog, which is a different figure entirely.
       term_months: 10, ca_fee: null, billed_to_date: 25000, fee_source: null,
+      qb_open_balance: 25000, qb_synced_at: '2026-08-30T12:00:00Z',
       amount: null, stage: 'Won', priority: 'LOW',
       proposal_sent_date: daysAgo(60), last_contact_date: daysAgo(5),
       next_action: 'Invoice balance', next_action_due: null,
@@ -69,9 +71,10 @@ async function stubBackend(page, opts = {}) {
   const state = { deals: fixtureDeals(), docs: fixtureDocs(), activities: [], nextId: 100 };
   // opts.strandedStage leaves a deal in a stage that has been retired
   if (opts.strandedStage) state.deals[1].stage = opts.strandedStage;
-  // opts.paidInFull bills the won deal to its full contract value, which should
-  // drop it out of A/R without changing its stage.
-  if (opts.paidInFull) state.deals[2].billed_to_date = 65000;
+  // opts.paidInFull clears the won deal's invoice in QuickBooks, which should
+  // drop it out of A/R without changing its stage. Note billed_to_date stays
+  // put: the money was still billed, it has just now been collected.
+  if (opts.paidInFull) state.deals[2].qb_open_balance = 0;
   const captured = [];
   const json = (route, body, status = 200) =>
     route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });

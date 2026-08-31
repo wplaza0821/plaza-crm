@@ -7,7 +7,7 @@ test('boots from stored session: KPIs, board, nav counts', async ({ page }) => {
   await stubBackend(page);
   const errors = await bootCrm(page);
   await expect(page.locator('.kpi')).toHaveCount(4);
-  await expect(page.locator('.board .col')).toHaveCount(7);
+  await expect(page.locator('.board .col')).toHaveCount(6);
   await expect(page.locator('.card', { hasText: 'Dome Repairs' })).toBeVisible();
   await expect(page.locator('#c-pipeline')).toHaveText('3');
   expect(errors).toEqual([]);
@@ -296,7 +296,7 @@ test('send status degrades to a notice when Graph is unavailable', async ({ page
 test('RFP Received is gone from the pipeline', async ({ page }) => {
   await stubBackend(page);
   const errors = await bootCrm(page);
-  await expect(page.locator('.board .col')).toHaveCount(7);
+  await expect(page.locator('.board .col')).toHaveCount(6);
   await expect(page.locator('.board .col-h .t', { hasText: 'RFP Received' })).toHaveCount(0);
   // and it is not offerable on a new deal
   await page.locator('#ndBtn').click();
@@ -397,14 +397,28 @@ test('Won-Pending Payment is gone from the pipeline', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test('Lead is merged into Proposal Sent and is the default for a new deal', async ({ page }) => {
+  await stubBackend(page);
+  const errors = await bootCrm(page);
+  await expect(page.locator('.board .col-h .t', { hasText: 'Lead' })).toHaveCount(0);
+  await page.locator('#ndBtn').click();
+  const opts = await page.locator('#dfStage option').allTextContents();
+  expect(opts.some((o) => o.includes('Lead'))).toBe(false);
+  // a new deal must not default into a stage the pipeline no longer shows
+  await expect(page.locator('#dfStage')).toHaveValue('Proposal Sent');
+  expect(errors).toEqual([]);
+});
+
 test('A/R is derived from billing, not from a stage', async ({ page }) => {
   await stubBackend(page);
   const errors = await bootCrm(page);
-  // North Bay Villas is Won with 25000 of 65000 invoiced -> 40000 outstanding
+  // North Bay Villas: 25000 invoiced and still open in QB -> A/R is 25000.
+  // It must NOT read 40000, which is the unbilled backlog (65000 - 25000).
   await expect(page.locator('#c-ar')).toHaveText('1');
   const ar = page.locator('.kpi', { hasText: 'A/R pending' });
-  await expect(ar).toContainText('$40,000');
-  await expect(ar).toContainText('1 won deal unbilled');
+  await expect(ar).toContainText('$25,000');
+  await expect(ar).not.toContainText('$40,000');
+  await expect(ar).toContainText('1 invoiced, awaiting payment');
   // it is Won, so it must also count toward Won 2026 at its FULL value —
   // A/R measures the unbilled slice and must never be netted off Won
   await expect(page.locator('.kpi', { hasText: 'Won 2026' })).toContainText('$65,000');
@@ -414,7 +428,7 @@ test('A/R is derived from billing, not from a stage', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test('a fully billed won deal leaves A/R but keeps its stage', async ({ page }) => {
+test('a paid won deal leaves A/R but keeps its stage', async ({ page }) => {
   await stubBackend(page, { paidInFull: true });
   const errors = await bootCrm(page);
   await expect(page.locator('#c-ar')).toHaveText('0');
