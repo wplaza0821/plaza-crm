@@ -1,3 +1,5 @@
 tests/node_modules/
 tests/test-results/
 tests/playwright-report/
+.sync_secret.sql
+deploy.log

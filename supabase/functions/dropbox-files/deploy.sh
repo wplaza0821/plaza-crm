@@ -33,13 +33,15 @@ if [ -z "${SUPABASE_ACCESS_TOKEN:-}" ]; then
   fi
 fi
 
-# Prompt for anything not already exported. Input is VISIBLE on purpose: a
-# hidden prompt is indistinguishable from a hung script.
+# Prompt for anything not already exported. Input is hidden so secrets never
+# land in scrollback, a pasted transcript, or a tee'd log; a masked echo
+# confirms each entry so a hidden prompt cannot be mistaken for a hang.
 ask() { # ask VARNAME "Prompt"
   local var="$1" prompt="$2" val="${!1:-}"
   if [ -z "$val" ]; then
-    printf '%s (typing is visible): ' "$prompt"
-    IFS= read -r val </dev/tty
+    printf '%s (typing is hidden; press Enter when done): ' "$prompt"
+    IFS= read -rs val </dev/tty; echo
+    printf '   received %s… (%d chars)\n' "${val:0:4}" "${#val}"
   fi
   [ -n "$val" ] || { echo "$var is required"; exit 1; }
   printf -v "$var" '%s' "$val"
@@ -89,8 +91,9 @@ cat <<EOF
 Functions are live. Two one-time steps remain, both in the Supabase SQL editor
 (https://supabase.com/dashboard/project/${PROJECT_REF}/sql):
 
-1. Store the cron secret in Vault (paste exactly):
-     select vault.create_secret('${SYNC_SECRET}', 'sync_secret');
+1. Store the cron secret in Vault. The value is in the file printed below —
+   open it, paste the line into the SQL editor, then delete the file:
+     $(printf '%s' "select vault.create_secret('${SYNC_SECRET}', 'sync_secret');" > .sync_secret.sql; echo ".sync_secret.sql")
 
 2. Run supabase/migrations/008_sync_runs.sql — creates sync_runs and schedules
    the 7am document sync on Supabase.
