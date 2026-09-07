@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Deploy the dropbox-files edge function to the Plaza CRM Supabase project.
+# Deploy the Dropbox edge functions to the Plaza CRM Supabase project.
 #
-#   export DROPBOX_APP_KEY=...
+#   export DROPBOX_APP_KEY=...          # same app the 7am sync already uses
 #   export DROPBOX_APP_SECRET=...
 #   export DROPBOX_REFRESH_TOKEN=...
 #   ./supabase/functions/dropbox-files/deploy.sh
 #
+# Deploys:  dropbox-files       (Documents tab: live check + fee scan)
+#           dropbox-docs-sync   (daily proposal sync, replaces the Mac cron)
+#
 # Everything targets the project by --project-ref, so there is NO `supabase link`
-# and therefore no database-password prompt to stall on. Reuse the SAME app
-# credentials the 7am crm_dropbox_docs.py sync already uses — that app is live
-# and, as of 2026-08-10, carries sharing.write.
+# and no database-password prompt to stall on.
 set -euo pipefail
 
 PROJECT_REF="zhxwkntrndaeqtkmbtsh"
-FN="dropbox-files"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 command -v supabase >/dev/null || {
@@ -46,11 +46,16 @@ ask() { # ask VARNAME "Prompt"
 }
 
 # Where the existing sync keeps its Dropbox credentials, if you would rather
-# copy them across than retype:
-#   grep -ri dropbox ~/.hermes/ -l
+# copy them across than retype:   grep -ri dropbox ~/.hermes/ -l
 ask DROPBOX_APP_KEY       "Dropbox app key"
 ask DROPBOX_APP_SECRET    "Dropbox app secret"
 ask DROPBOX_REFRESH_TOKEN "Dropbox refresh token"
+
+# Cron trigger secret: generated here if not supplied. Save the printed value —
+# migration 008 needs it in Vault as 'sync_secret'.
+SYNC_SECRET="${SYNC_SECRET:-$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 40)}"
+# Dropbox paths that hold the project folders (comma-separated).
+DROPBOX_PROJECTS_ROOTS="${DROPBOX_PROJECTS_ROOTS:-/William Plaza/2026 PROJECTS,/William Plaza/2025 PROJECTS}"
 
 cd "$ROOT"
 
@@ -58,31 +63,39 @@ echo "==> setting secrets on $PROJECT_REF"
 supabase secrets set --project-ref "$PROJECT_REF" \
   DROPBOX_APP_KEY="$DROPBOX_APP_KEY" \
   DROPBOX_APP_SECRET="$DROPBOX_APP_SECRET" \
-  DROPBOX_REFRESH_TOKEN="$DROPBOX_REFRESH_TOKEN"
+  DROPBOX_REFRESH_TOKEN="$DROPBOX_REFRESH_TOKEN" \
+  DROPBOX_PROJECTS_ROOTS="$DROPBOX_PROJECTS_ROOTS" \
+  SYNC_SECRET="$SYNC_SECRET"
 
-echo "==> deploying $FN (first deploy pulls the unpdf dependency; ~30-60s)"
-supabase functions deploy "$FN" --project-ref "$PROJECT_REF"
+for FN in dropbox-files dropbox-docs-sync; do
+  echo "==> deploying $FN"
+  supabase functions deploy "$FN" --project-ref "$PROJECT_REF"
+done
 
-echo "==> verifying"
-# Unauthenticated POST must now be REJECTED (401), not missing (404).
-code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-  "https://${PROJECT_REF}.supabase.co/functions/v1/${FN}" \
-  -H "Content-Type: application/json" -d '{"action":"list","path":"/"}')
-case "$code" in
-  401|403) echo "OK — function is live and rejecting unauthenticated calls (HTTP $code)";;
-  404)     echo "FAILED — still 404. The deploy did not land; check the output above."; exit 1;;
-  *)       echo "Unexpected HTTP $code — function responded, but check the logs:"
-           echo "  supabase functions logs $FN --project-ref $PROJECT_REF";;
-esac
+echo "==> verifying (unauthenticated POST must be 401, not 404)"
+for FN in dropbox-files dropbox-docs-sync; do
+  code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    "https://${PROJECT_REF}.supabase.co/functions/v1/${FN}" \
+    -H "Content-Type: application/json" -d '{}')
+  case "$code" in
+    401|403) echo "  $FN: OK (HTTP $code)";;
+    404)     echo "  $FN: FAILED — still 404"; exit 1;;
+    *)       echo "  $FN: HTTP $code — check: supabase functions logs $FN --project-ref $PROJECT_REF";;
+  esac
+done
 
-cat <<'EOF'
+cat <<EOF
 
-Next: in the CRM, open a deal, set its Dropbox folder in the Edit tab
-(e.g. /Proposals/Dome, exactly as it appears in Dropbox), then open the
-Documents tab and use "Check Dropbox now" / "Scan for fee".
+Functions are live. Two one-time steps remain, both in the Supabase SQL editor
+(https://supabase.com/dashboard/project/${PROJECT_REF}/sql):
 
-If a call fails, the message names the cause:
-  invalid_grant     refresh token wrong, or issued for a different app
-  path/not_found    the folder path does not match Dropbox exactly
-  missing_scope     enable files.metadata.read + files.content.read, then Submit
+1. Store the cron secret in Vault (paste exactly):
+     select vault.create_secret('${SYNC_SECRET}', 'sync_secret');
+
+2. Run supabase/migrations/008_sync_runs.sql — creates sync_runs and schedules
+   the 7am document sync on Supabase.
+
+Then in the CRM the rail footer shows "Documents · synced …"; click "Sync now"
+to run the first one immediately. Once it reports a successful run, the Mac
+cron for crm_dropbox_docs.py can be disabled.
 EOF

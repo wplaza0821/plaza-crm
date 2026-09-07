@@ -68,7 +68,10 @@ function fixtureDocs() {
 // Stub the whole backend. Returns {captured, state} for assertions.
 // opts.dropboxDown simulates the edge function not being deployed.
 async function stubBackend(page, opts = {}) {
-  const state = { deals: fixtureDeals(), docs: fixtureDocs(), activities: [], nextId: 100 };
+  const state = { deals: fixtureDeals(), docs: fixtureDocs(), activities: [], nextId: 100,
+    syncRuns: opts.syncRuns || [
+      { job: 'dropbox_docs', finished_at: new Date(Date.now() - 6 * 36e5).toISOString(), ok: true },
+    ] };
   // opts.strandedStage leaves a deal in a stage that has been retired
   if (opts.strandedStage) state.deals[1].stage = opts.strandedStage;
   // opts.paidInFull clears the won deal's invoice in QuickBooks, which should
@@ -137,6 +140,18 @@ async function stubBackend(page, opts = {}) {
         ] });
       }
       return json(route, { error: 'unknown action' }, 400);
+    }
+    // background-sync bookkeeping (migration 008). opts.syncRuns overrides;
+    // opts.noSyncTable simulates the migration not having been run yet.
+    if (url.pathname.startsWith('/rest/v1/sync_runs')) {
+      if (opts.noSyncTable) return json(route, { message: 'relation "sync_runs" does not exist' }, 404);
+      if (method === 'POST') { state.syncRuns.unshift({ ...body, id: state.nextId++ }); return json(route, [], 201); }
+      return json(route, state.syncRuns);
+    }
+    if (url.pathname.startsWith('/functions/v1/dropbox-docs-sync')) {
+      if (opts.dropboxDown) return json(route, { error: 'Function not found' }, 404);
+      state.syncRuns.unshift({ job: 'dropbox_docs', finished_at: new Date().toISOString(), ok: true });
+      return json(route, { ok: true, stats: { deals_matched: 3, docs_upserted: 5, docs_removed: 0, links_created: 1 } });
     }
     if (url.pathname.startsWith('/rest/v1/deal_documents')) {
       const m = url.search.match(/deal_id=eq\.(\d+)/);

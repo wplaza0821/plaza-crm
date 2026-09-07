@@ -440,6 +440,53 @@ test('a paid won deal leaves A/R but keeps its stage', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test('rail footer shows sync freshness and Sync now runs the job', async ({ page }) => {
+  await stubBackend(page);
+  const errors = await bootCrm(page);
+  const docs = page.locator('#syncstat .row', { hasText: 'Documents' });
+  await expect(docs).toContainText('6h ago');
+  await expect(docs).toHaveClass(/\bok\b/);
+  // No qb_reconcile run is recorded, so QuickBooks freshness falls back to the
+  // newest qb_synced_at on the deals (North Bay, 2026-08-30) — old enough to be red
+  const qb = page.locator('#syncstat .row', { hasText: 'QuickBooks' });
+  await expect(qb).not.toContainText('never');
+  await expect(qb).toHaveClass(/\bcrit\b/);
+  await page.locator('#syncNow').click();
+  await expect(page.locator('#toast')).toContainText('Synced 5 documents across 3 deals');
+  await expect(docs).toContainText('just now');
+  expect(errors).toEqual([]);
+});
+
+test('a stale or failed sync is called out, not hidden', async ({ page }) => {
+  await stubBackend(page, { syncRuns: [
+    { job: 'dropbox_docs', finished_at: new Date(Date.now() - 5 * 864e5).toISOString(), ok: false, error: 'invalid_grant' },
+    { job: 'qb_reconcile', finished_at: new Date(Date.now() - 40 * 36e5).toISOString(), ok: true },
+  ] });
+  await bootCrm(page);
+  const docs = page.locator('#syncstat .row', { hasText: 'Documents' });
+  await expect(docs).toContainText('failed');
+  await expect(docs).toHaveClass(/\bcrit\b/);
+  await expect(docs).toHaveAttribute('title', 'invalid_grant');
+  const qb = page.locator('#syncstat .row', { hasText: 'QuickBooks' });
+  await expect(qb).toHaveClass(/\bwarn\b/);   // 40h: amber, not yet red
+});
+
+test('footer survives the sync_runs table not existing yet', async ({ page }) => {
+  await stubBackend(page, { noSyncTable: true });
+  const errors = await bootCrm(page);
+  await expect(page.locator('#syncstat .row', { hasText: 'Documents' })).toContainText('never');
+  await expect(page.locator('.board .card').first()).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('Sync now reports a failure and re-enables itself', async ({ page }) => {
+  await stubBackend(page, { dropboxDown: true });
+  await bootCrm(page);
+  await page.locator('#syncNow').click();
+  await expect(page.locator('#toast')).toContainText('Sync failed');
+  await expect(page.locator('#syncNow')).toBeEnabled();
+});
+
 test('mobile viewport: burger nav present, board scrolls', async ({ page }) => {
   await stubBackend(page);
   const errors = await bootCrm(page, { viewport: { width: 390, height: 844 } });
