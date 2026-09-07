@@ -182,7 +182,7 @@ async function runSync() {
       const deal = byNo.get(projectNo);
       if (!deal) { if (!stats.unmatched_folders.includes(folder)) stats.unmatched_folders.push(folder); continue; }
       if (!isCandidate(f.name, projectNo)) continue;
-      const g = perDeal.get(deal.id) || { deal, year: year || "", files: [] };
+      const g = perDeal.get(deal.id) || { deal, year: year || "", files: [] as any[] };
       g.files.push(f); perDeal.set(deal.id, g);
     }
   }

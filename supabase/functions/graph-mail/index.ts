@@ -29,6 +29,73 @@ O: (786) 310-5428 ext. 1<br>C: (305) 469-1120<br>
 
 const SIGNATURE = (Deno.env.get("GRAPH_SIGNATURE_HTML") || "").trim() || FALLBACK_SIGNATURE;
 
+/* ---------------- inline logo ----------------
+ * Mail clients block remote images by default, so a signature that links its
+ * logo shows a placeholder to anyone reading the message for the first time.
+ * The logo is instead fetched once and attached to the message itself, and the
+ * signature refers to it as <img src="cid:plazalogo">.
+ *
+ * If the fetch fails the send must not: the cid reference is rewritten to the
+ * absolute URL, so the image degrades to "blocked until allowed" rather than
+ * broken, and the mail still goes out.
+ */
+const LOGO_CID = "plazalogo";
+const LOGO_URL = Deno.env.get("GRAPH_SIGNATURE_LOGO_URL") ||
+  "https://plazacore.plazaandassociates.com/email-logo.png";
+
+/* Spreading a large Uint8Array into String.fromCharCode blows the argument
+   limit, so encode in chunks. */
+function toBase64(bytes: Uint8Array): string {
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+let logoCache: { b64: string; type: string; name: string } | null = null;
+let logoTried = false;
+async function getLogo() {
+  if (logoTried) return logoCache;
+  logoTried = true;
+  try {
+    const r = await fetch(LOGO_URL);
+    if (!r.ok) throw new Error(`logo fetch ${r.status}`);
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    // Guard against an HTML error page being attached as if it were an image.
+    const type = r.headers.get("content-type") || "image/png";
+    if (!type.startsWith("image/")) throw new Error(`logo is ${type}, not an image`);
+    logoCache = {
+      b64: toBase64(bytes),
+      type,
+      name: (LOGO_URL.split("/").pop() || "logo.png").split("?")[0],
+    };
+  } catch (e) {
+    console.error("inline logo unavailable, falling back to remote URL:", String(e));
+    logoCache = null;
+  }
+  return logoCache;
+}
+
+/* Returns the html to send plus any attachments it needs. */
+async function withInlineLogo(html: string): Promise<{ html: string; attachments: unknown[] }> {
+  if (!html.includes(`cid:${LOGO_CID}`)) return { html, attachments: [] };
+  const logo = await getLogo();
+  if (!logo) return { html: html.replaceAll(`cid:${LOGO_CID}`, LOGO_URL), attachments: [] };
+  return {
+    html,
+    attachments: [{
+      "@odata.type": "#microsoft.graph.fileAttachment",
+      name: logo.name,
+      contentType: logo.type,
+      contentBytes: logo.b64,
+      contentId: LOGO_CID,
+      isInline: true,
+    }],
+  };
+}
+
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -425,11 +492,41 @@ Deno.serve(async (req) => {
       const id = String(payload.id || "");
       const body = String(payload.body || "").trim();
       if (!id || !body) return json({ error: "id and body required" }, 400);
-      const html = `<div>${body.replace(/\n/g, "<br>")}</div>${SIGNATURE}`;
-      const r = await fetch(`${GRAPH}/me/messages/${id}/replyAll`, {
-        method: "POST", headers: H, body: JSON.stringify({ comment: html }),
+      const composed = await withInlineLogo(
+        `<div>${body.replace(/\n/g, "<br>")}</div>${SIGNATURE}`);
+
+      /* replyAll's `comment` cannot carry attachments, so an inline logo needs
+         the draft route: create the reply, prepend our text to the quoted
+         original Graph already put in the draft, attach, then send. Without an
+         attachment the one-shot call is still used — fewer round trips and
+         fewer ways to leave an orphan draft in Drafts. */
+      if (!composed.attachments.length) {
+        const r = await fetch(`${GRAPH}/me/messages/${id}/replyAll`, {
+          method: "POST", headers: H, body: JSON.stringify({ comment: composed.html }),
+        });
+        if (!r.ok) return json({ error: `graph ${r.status}: ${(await r.text()).slice(0, 300)}` }, 502);
+        return json({ ok: true, sent_by: email });
+      }
+
+      const mk = await fetch(`${GRAPH}/me/messages/${id}/createReplyAll`, {
+        method: "POST", headers: H, body: "{}",
       });
-      if (!r.ok) return json({ error: `graph ${r.status}: ${(await r.text()).slice(0, 300)}` }, 502);
+      if (!mk.ok) return json({ error: `graph ${mk.status}: ${(await mk.text()).slice(0, 300)}` }, 502);
+      const draft = await mk.json();
+      const draftId = draft.id;
+      // Keep the quoted original Graph generated; our text goes above it.
+      const quoted = draft.body?.content || "";
+      const patch = await fetch(`${GRAPH}/me/messages/${draftId}`, {
+        method: "PATCH", headers: H,
+        body: JSON.stringify({ body: { contentType: "HTML", content: composed.html + quoted } }),
+      });
+      if (!patch.ok) return json({ error: `graph ${patch.status}: ${(await patch.text()).slice(0, 300)}` }, 502);
+      const att = await fetch(`${GRAPH}/me/messages/${draftId}/attachments`, {
+        method: "POST", headers: H, body: JSON.stringify(composed.attachments[0]),
+      });
+      if (!att.ok) return json({ error: `graph ${att.status}: ${(await att.text()).slice(0, 300)}` }, 502);
+      const snd = await fetch(`${GRAPH}/me/messages/${draftId}/send`, { method: "POST", headers: H });
+      if (!snd.ok) return json({ error: `graph ${snd.status}: ${(await snd.text()).slice(0, 300)}` }, 502);
       return json({ ok: true, sent_by: email });
     }
 
@@ -442,15 +539,17 @@ Deno.serve(async (req) => {
       if (!to.length || !subject || !body) {
         return json({ error: "to, subject and body required" }, 400);
       }
-      const html = `<div>${body.replace(/\n/g, "<br>")}</div>${SIGNATURE}`;
+      const composed = await withInlineLogo(
+        `<div>${body.replace(/\n/g, "<br>")}</div>${SIGNATURE}`);
       const r = await fetch(`${GRAPH}/me/sendMail`, {
         method: "POST", headers: H,
         body: JSON.stringify({
           message: {
             subject,
-            body: { contentType: "HTML", content: html },
+            body: { contentType: "HTML", content: composed.html },
             toRecipients: to.map((a) => ({ emailAddress: { address: a } })),
             ccRecipients: cc.map((a) => ({ emailAddress: { address: a } })),
+            ...(composed.attachments.length ? { attachments: composed.attachments } : {}),
           },
           saveToSentItems: true,
         }),

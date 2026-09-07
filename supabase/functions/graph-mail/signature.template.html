@@ -10,9 +10,11 @@
 <table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif;border-collapse:collapse;">
   <tr>
     <td style="padding-right:16px;border-right:2px solid #020000;vertical-align:top;">
-      <!-- Absolute URL required: a local path renders broken for recipients.
+      <!-- cid: refers to the copy graph-mail attaches to the message itself, so
+           the logo shows even when the client blocks remote images. If the logo
+           cannot be fetched at send time this is rewritten to the absolute URL.
            Width/height as attributes, not CSS — several clients ignore CSS sizing. -->
-      <img src="https://plazacore.plazaandassociates.com/email-logo.png"
+      <img src="cid:plazalogo"
            alt="Plaza &amp; Associates" width="120" height="46"
            style="display:block;border:0;outline:none;text-decoration:none;">
     </td>
