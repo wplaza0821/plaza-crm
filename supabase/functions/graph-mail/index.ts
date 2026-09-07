@@ -27,7 +27,11 @@ const FALLBACK_SIGNATURE = `<br><br><div>Regards,</div><br>
 O: (786) 310-5428 ext. 1<br>C: (305) 469-1120<br>
 <a href="http://www.plazaandassociates.com">www.plazaandassociates.com</a></div>`;
 
-const SIGNATURE = (Deno.env.get("GRAPH_SIGNATURE_HTML") || "").trim() || FALLBACK_SIGNATURE;
+/* Read per call, not once at module load: a module-scope constant is captured
+   at cold start, so updating the secret appeared to do nothing until the worker
+   happened to restart. */
+const signature = () =>
+  (Deno.env.get("GRAPH_SIGNATURE_HTML") || "").trim() || FALLBACK_SIGNATURE;
 
 /* ---------------- inline logo ----------------
  * Mail clients block remote images by default, so a signature that links its
@@ -493,7 +497,7 @@ Deno.serve(async (req) => {
       const body = String(payload.body || "").trim();
       if (!id || !body) return json({ error: "id and body required" }, 400);
       const composed = await withInlineLogo(
-        `<div>${body.replace(/\n/g, "<br>")}</div>${SIGNATURE}`);
+        `<div>${body.replace(/\n/g, "<br>")}</div>${signature()}`);
 
       /* replyAll's `comment` cannot carry attachments, so an inline logo needs
          the draft route: create the reply, prepend our text to the quoted
@@ -540,7 +544,7 @@ Deno.serve(async (req) => {
         return json({ error: "to, subject and body required" }, 400);
       }
       const composed = await withInlineLogo(
-        `<div>${body.replace(/\n/g, "<br>")}</div>${SIGNATURE}`);
+        `<div>${body.replace(/\n/g, "<br>")}</div>${signature()}`);
       const r = await fetch(`${GRAPH}/me/sendMail`, {
         method: "POST", headers: H,
         body: JSON.stringify({
