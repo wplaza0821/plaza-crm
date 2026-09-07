@@ -1,0 +1,45 @@
+<!-- Plaza & Associates — formal outbound signature (template).
+     Copy to signature.html, CORRECT THE MARKED LINES against the Outlook
+     original, then set GRAPH_SIGNATURE_HTML from it. See SIGNATURE.md.
+
+     Table layout and inline styles are deliberate: Outlook ignores <style>
+     blocks and lays flexbox/grid out unpredictably. -->
+<br><br>
+<div style="font-family:Arial,Helvetica,sans-serif;font-size:11pt;color:#333333;">Regards,</div>
+<br>
+<table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif;border-collapse:collapse;">
+  <tr>
+    <td style="padding-right:16px;border-right:2px solid #020000;vertical-align:top;">
+      <!-- Absolute URL required: a local path renders broken for recipients.
+           Width/height as attributes, not CSS — several clients ignore CSS sizing. -->
+      <img src="https://plazacore.plazaandassociates.com/email-logo.png"
+           alt="Plaza &amp; Associates" width="120" height="46"
+           style="display:block;border:0;outline:none;text-decoration:none;">
+    </td>
+    <td style="padding-left:16px;vertical-align:top;">
+      <!-- VERIFY: exact name line, including any credential suffix (P.E., etc.) -->
+      <div style="font-size:12pt;font-weight:bold;color:#020000;letter-spacing:0.4px;">WILLIAM PLAZA</div>
+      <!-- VERIFY: exact title as it appears in Outlook -->
+      <div style="font-size:10pt;color:#333333;padding-top:1px;">Principal</div>
+      <div style="font-size:10pt;font-weight:bold;color:#020000;padding-top:8px;">PLAZA &amp; ASSOCIATES</div>
+      <div style="font-size:9.5pt;color:#555555;line-height:1.5;padding-top:4px;">
+        2222 Ponce de Leon Boulevard<br>
+        Coral Gables, Florida 33134
+      </div>
+      <div style="font-size:9.5pt;color:#555555;line-height:1.5;padding-top:6px;">
+        O: <a href="tel:+17863105428" style="color:#555555;text-decoration:none;">(786) 310-5428</a> ext. 1<br>
+        C: <a href="tel:+13054691120" style="color:#555555;text-decoration:none;">(305) 469-1120</a>
+      </div>
+      <div style="font-size:9.5pt;padding-top:6px;">
+        <a href="https://www.plazaandassociates.com" style="color:#1f6581;text-decoration:none;">www.plazaandassociates.com</a>
+      </div>
+    </td>
+  </tr>
+</table>
+<!-- OPTIONAL: confidentiality notice. Delete this block if Outlook does not use one,
+     or replace with the firm's exact wording. -->
+<div style="font-family:Arial,Helvetica,sans-serif;font-size:7.5pt;color:#999999;line-height:1.4;padding-top:12px;max-width:520px;">
+  This message and any attachments are intended solely for the addressee and may contain
+  confidential or privileged information. If you received this in error, please notify the
+  sender and delete it.
+</div>
