@@ -7,12 +7,27 @@ const TENANT_ID = "7b4a88f5-2be6-4196-a2a3-2a114390b93e";
 const CLIENT_ID = "fe9862cc-2672-4bc8-b64e-68d0f902061c";
 const GRAPH = "https://graph.microsoft.com/v1.0";
 
-const SIGNATURE = `<br><br><div>Regards,</div><br>
+/* Outbound signature.
+ *
+ * Outlook applies the firm's formal signature client-side, so mail sent
+ * through Graph gets none — this supplies it. Held in the GRAPH_SIGNATURE_HTML
+ * secret rather than in source, so it can be corrected without a code change
+ * and stays in step with the Outlook original:
+ *
+ *   supabase secrets set --project-ref zhxwkntrndaeqtkmbtsh \
+ *     GRAPH_SIGNATURE_HTML="$(cat signature.html)"
+ *
+ * The fallback below is the abbreviated block that predates this and is NOT
+ * the formal signature; it exists only so mail is never sent unsigned.
+ */
+const FALLBACK_SIGNATURE = `<br><br><div>Regards,</div><br>
 <div><b>WILLIAM PLAZA</b><br>Principal</div><br>
 <div><b>PLAZA &amp; ASSOCIATES</b><br>
 2222 Ponce de Leon Boulevard<br>Coral Gables, Florida 33134<br>
 O: (786) 310-5428 ext. 1<br>C: (305) 469-1120<br>
 <a href="http://www.plazaandassociates.com">www.plazaandassociates.com</a></div>`;
+
+const SIGNATURE = (Deno.env.get("GRAPH_SIGNATURE_HTML") || "").trim() || FALLBACK_SIGNATURE;
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
