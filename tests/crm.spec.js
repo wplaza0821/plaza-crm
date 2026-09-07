@@ -487,6 +487,17 @@ test('Sync now reports a failure and re-enables itself', async ({ page }) => {
   await expect(page.locator('#syncNow')).toBeEnabled();
 });
 
+test('a non-JSON function error surfaces its real message', async ({ page }) => {
+  await stubBackend(page, { dropboxRawError: 'unexpected error occurred' });
+  await bootCrm(page);
+  await page.locator('.card', { hasText: 'Dome Repairs' }).click();
+  await page.locator('.drawer .tab', { hasText: 'Documents' }).click();
+  await page.locator('.drawer button', { hasText: 'Check Dropbox now' }).click();
+  // the plain-text body is shown, not "Unexpected token 'u'"
+  await expect(page.locator('#livedocs')).toContainText('unexpected error occurred');
+  await expect(page.locator('#livedocs')).not.toContainText('is not valid JSON');
+});
+
 test('mobile viewport: burger nav present, board scrolls', async ({ page }) => {
   await stubBackend(page);
   const errors = await bootCrm(page, { viewport: { width: 390, height: 844 } });

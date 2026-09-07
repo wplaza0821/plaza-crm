@@ -671,24 +671,26 @@ async function api(path,opts={}){
   if(!raw) return null;
   try{return JSON.parse(raw);}catch(e){return null;}
 }
-async function fn(payload){
+/* Edge functions do not always answer with JSON: a boot failure, a gateway
+   error or a platform timeout comes back as plain text, and calling r.json()
+   on that threw "Unexpected token 'u'" — hiding the real message. Read the
+   body as text, then parse only if it looks like JSON. */
+async function callFn(url,payload){
   const t=await tok();
-  const r=await fetch(FN,{method:'POST',
+  const r=await fetch(url,{method:'POST',
     headers:{'apikey':SB_KEY,'Authorization':'Bearer '+t,'Content-Type':'application/json'},
     body:JSON.stringify(payload)});
-  const d=await r.json();
-  if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
+  const raw=await r.text();
+  let d=null;
+  try{ d=raw?JSON.parse(raw):null; }catch(e){ d=null; }
+  if(!r.ok||d===null){
+    const msg=(d&&(d.error||d.message))||raw.slice(0,200)||('HTTP '+r.status);
+    throw new Error(msg.trim()+(r.ok?'':' (HTTP '+r.status+')'));
+  }
   return d;
 }
-async function fnD(payload){
-  const t=await tok();
-  const r=await fetch(FN_DBX,{method:'POST',
-    headers:{'apikey':SB_KEY,'Authorization':'Bearer '+t,'Content-Type':'application/json'},
-    body:JSON.stringify(payload)});
-  const d=await r.json();
-  if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
-  return d;
-}
+const fn =payload=>callFn(FN,payload);
+const fnD=payload=>callFn(FN_DBX,payload);
 async function boot(){
   document.getElementById('login').style.display='none';
   document.getElementById('recover').style.display='none';
@@ -745,10 +747,8 @@ async function syncNow(){
   const b=document.getElementById('syncNow'); if(b){b.disabled=true;b.textContent='Syncing...';}
   try{
     const t=await tok();
-    const r=await fetch(FN_SYNC,{method:'POST',
-      headers:{'apikey':SB_KEY,'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:'{}'});
-    const d=await r.json().catch(()=>({}));
-    if(!r.ok||!d.ok) throw new Error(d.error||('HTTP '+r.status));
+    const d=await callFn(FN_SYNC,{});
+    if(!d.ok) throw new Error(d.error||'sync reported failure');
     const st=d.stats||{};
     toast(`Synced ${st.docs_upserted||0} documents across ${st.deals_matched||0} deals`);
     await load();

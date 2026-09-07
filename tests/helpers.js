@@ -119,6 +119,10 @@ async function stubBackend(page, opts = {}) {
     }
     if (url.pathname.startsWith('/functions/v1/dropbox-files')) {
       if (opts.dropboxDown) return json(route, { error: 'Function not found' }, 404);
+      // a boot failure or gateway error answers with plain text, not JSON
+      if (opts.dropboxRawError) {
+        return route.fulfill({ status: 500, contentType: 'text/plain', body: opts.dropboxRawError });
+      }
       if (body?.action === 'list') {
         return json(route, { files: [
           { name: 'Dome Proposal Rev2.pdf', path: '/Proposals/Dome/Dome Proposal Rev2.pdf',

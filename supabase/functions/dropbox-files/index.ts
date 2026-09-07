@@ -14,8 +14,6 @@
 // Auth: caller must present a valid Supabase JWT (same gate as graph-mail);
 // verified against GoTrue before any Dropbox call.
 
-import { extractText, getDocumentProxy } from "npm:unpdf";
-
 const SB_URL = Deno.env.get("SUPABASE_URL")!;
 const SB_ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
 const APP_KEY = Deno.env.get("DROPBOX_APP_KEY")!;
@@ -182,6 +180,14 @@ Deno.serve(async (req) => {
       const name = body.path
         ? String(body.path).split("/").pop()
         : decodeURIComponent(String(body.shared_url).split("?")[0].split("/").pop() || "document");
+      // Imported here, not at module scope: if the PDF library fails to load,
+      // only the fee scan degrades — list and link keep working.
+      let extractText, getDocumentProxy;
+      try {
+        ({ extractText, getDocumentProxy } = await import("npm:unpdf@0.12.1"));
+      } catch (e) {
+        return json({ error: "PDF reader unavailable: " + (e as Error).message }, 503);
+      }
       const pdf = await getDocumentProxy(bytes);
       const { text } = await extractText(pdf, { mergePages: true });
       const candidates = findAmounts(String(text || ""));
