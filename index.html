@@ -568,6 +568,7 @@ const SB_KEY='sb_publishable_FU92Md7Bi2WojPfUqtKCGw_7pG7Ul6s';
 const FN=SB_URL+'/functions/v1/graph-mail';
 const FN_DBX=SB_URL+'/functions/v1/dropbox-files';
 const FN_SYNC=SB_URL+'/functions/v1/dropbox-docs-sync';
+const FN_QB=SB_URL+'/functions/v1/qb-reconcile';
 const LS='plaza_crm_session';
 let SESSION=null, DEALS=[], CUR=null, TAB='emails', VIEW='pipeline';
 /* Rows for the currently open Documents tab, so copyDoc() can find a url by id. */
@@ -704,10 +705,12 @@ async function boot(){
 }
 /* ---------- background-sync freshness ----------
    Two jobs feed the CRM from outside: the Dropbox document sync and the
-   QuickBooks reconcile. When they stop, data goes stale silently. Each run is
-   recorded in sync_runs (migration 008); QuickBooks freshness also falls back
-   to the newest qb_synced_at on the deals themselves, which the current Mac
-   script already writes. Missing table = "never", never a crash. */
+   QuickBooks reconcile. When they stop, data goes stale silently. Both now run
+   on Supabase itself (migrations 008 and 009) and record every run in sync_runs.
+   QuickBooks still falls back to the newest qb_synced_at on the deals, which is
+   what the retired Mac script wrote — that fallback is what keeps the rail
+   honest for deals last touched before the port. Missing table = "never",
+   never a crash. */
 let SYNC_RUNS=[];
 async function loadSyncStatus(){
   try{ SYNC_RUNS=await api('sync_runs?select=job,finished_at,ok,error&order=finished_at.desc&limit=40')||[]; }
@@ -743,19 +746,28 @@ function paintSyncStatus(){
     row('QuickBooks',qbAt,false,'A/R reconcile')+
     `<button class="sm" id="syncNow" onclick="syncNow()">Sync now</button>`;
 }
+/* Runs BOTH background jobs the rail reports on, so the button and the freshness
+   rows above it mean the same thing. They are independent — Dropbox being down
+   must not leave A/R stale — so each is settled on its own and one failing still
+   reports the other's result. The reconcile writes by default, exactly as the
+   7:15 cron does; a read-only run is not what "Sync now" is for. */
 async function syncNow(){
   const b=document.getElementById('syncNow'); if(b){b.disabled=true;b.textContent='Syncing...';}
-  try{
-    const t=await tok();
-    const d=await callFn(FN_SYNC,{});
-    if(!d.ok) throw new Error(d.error||'sync reported failure');
-    const st=d.stats||{};
-    toast(`Synced ${st.docs_upserted||0} documents across ${st.deals_matched||0} deals`);
-    await load();
-  }catch(e){
-    toast('Sync failed: '+e.message,true);
-    if(b){b.disabled=false;b.textContent='Sync now';}
-  }
+  const [docs,qb]=await Promise.allSettled([callFn(FN_SYNC,{}),callFn(FN_QB,{})]);
+  const done=[],failed=[];
+  if(docs.status==='fulfilled'&&docs.value.ok){
+    const st=docs.value.stats||{};
+    done.push(`${st.docs_upserted||0} documents across ${st.deals_matched||0} deals`);
+  } else failed.push('documents: '+(docs.status==='rejected'?docs.reason.message:(docs.value.error||'reported failure')));
+  if(qb.status==='fulfilled'&&qb.value.ok){
+    const st=qb.value.stats||{};
+    done.push(`${st.billing_refreshed||0} deals rebilled from QuickBooks`+
+      (st.stage_changes?`, ${st.stage_changes} stage change(s)`:''));
+  } else failed.push('QuickBooks: '+(qb.status==='rejected'?qb.reason.message:(qb.value.error||'reported failure')));
+  if(done.length) toast('Synced '+done.join(' · '));
+  if(failed.length) toast('Sync failed — '+failed.join(' | '),true);
+  await load();
+  if(b){b.disabled=false;b.textContent='Sync now';}
 }
 
 /* Contract value, HubSpot-style. A Plaza proposal is not one number:

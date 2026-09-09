@@ -102,8 +102,19 @@ async function withInlineLogo(html: string): Promise<{ html: string; attachments
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-sync-secret",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+/* Machine callers. The qb-reconcile cron has no user session — it runs from
+ * pg_cron — but it still has to be able to mail William when it corrects a
+ * deal's stage. It authenticates with the same shared secret pg_cron uses to
+ * invoke the syncs, and is deliberately limited to `send`: reading the mailbox
+ * stays behind a signed-in, allow-listed human. */
+const SYNC_SECRET = Deno.env.get("SYNC_SECRET") || "";
+const isMachine = (req: Request) => {
+  const s = req.headers.get("x-sync-secret");
+  return !!(SYNC_SECRET && s && s === SYNC_SECRET);
 };
 
 const json = (body: unknown, status = 200) =>
@@ -222,7 +233,8 @@ function stripHtml(h: string, n = 6000): string {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
 
-  const email = await requireUser(req);
+  const machine = isMachine(req);
+  const email = machine ? "automation" : await requireUser(req);
   if (!email) return json({ error: "unauthorized — please sign in" }, 401);
 
   let payload: Record<string, unknown>;
@@ -232,6 +244,9 @@ Deno.serve(async (req) => {
     return json({ error: "invalid JSON body" }, 400);
   }
   const action = String(payload.action || "");
+  if (machine && action !== "send") {
+    return json({ error: "automation may only send" }, 403);
+  }
 
   try {
     const tok = await graphToken();
@@ -543,8 +558,10 @@ Deno.serve(async (req) => {
       if (!to.length || !subject || !body) {
         return json({ error: "to, subject and body required" }, 400);
       }
+      // The firm signature belongs on correspondence, not on an internal
+      // machine notice — a sync report does not need Plaza's letterhead.
       const composed = await withInlineLogo(
-        `<div>${body.replace(/\n/g, "<br>")}</div>${signature()}`);
+        `<div>${body.replace(/\n/g, "<br>")}</div>${machine ? "" : signature()}`);
       const r = await fetch(`${GRAPH}/me/sendMail`, {
         method: "POST", headers: H,
         body: JSON.stringify({
