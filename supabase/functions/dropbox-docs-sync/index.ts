@@ -14,6 +14,17 @@
 //     migrations/008_sync_runs.sql)
 //   - "Sync now" in the CRM with the user's JWT
 //
+//
+// DEPLOY WITH --no-verify-jwt. pg_cron's net.http_post sends only Content-Type
+// and X-Sync-Secret — no Authorization header — so with JWT verification on,
+// the API gateway answers UNAUTHORIZED_NO_AUTH_HEADER before this code runs and
+// the cron fails silently: pg_cron records "succeeded" (the request was sent),
+// the 401 lands in net._http_response, and nothing reads it. That is exactly
+// how migration 008's schedule sat broken from the day it shipped until
+// 2026-09-08 — the document sync only ever ran when someone clicked "Sync now".
+// Authorisation is not weakened by the flag: authorised() below still demands
+// the shared secret or a real user JWT.
+//   supabase functions deploy <name> --project-ref zhxwkntrndaeqtkmbtsh --no-verify-jwt
 // Secrets:
 //   DROPBOX_APP_KEY, DROPBOX_APP_SECRET, DROPBOX_REFRESH_TOKEN  (shared with dropbox-files)
 //   DROPBOX_PROJECTS_ROOTS  comma-separated Dropbox paths, default
