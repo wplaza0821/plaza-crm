@@ -663,6 +663,32 @@ Deno.serve(async (req) => {
   if (!(await authorised(req))) return json({ error: "Unauthorized" }, 401);
 
   const payload = await req.json().catch(() => ({}));
+
+  /* Diagnostic: every invoice whose LINE descriptions mention a project number,
+     with the project numbers found on it and where the matcher sent it. Answers
+     "this was billed, why is the CRM saying it was not" without guesswork.
+     Read-only. */
+  if (payload?.action === "trace") {
+    const want = String(payload.project_no || "").trim();
+    if (!want) return json({ error: "project_no required" }, 400);
+    const yrs = Array.isArray(payload.years) && payload.years.length
+      ? payload.years.map(Number) : [new Date().getFullYear(), new Date().getFullYear() - 1];
+    const invs = await fetchInvoices(yrs);
+    const hits = invs.filter((i) => i.projs.includes(want) ||
+      i.doc === want || i.cust.includes(want));
+    return json({
+      ok: true, project_no: want, years: yrs, invoices_scanned: invs.length,
+      matches: hits.map((i) => ({
+        doc: i.doc, date: i.date, customer: i.cust, amount: i.amt, balance: i.bal,
+        project_numbers_on_invoice: i.projs,
+        /* The matcher takes the FIRST project number in this (sorted) list that
+           exists in the CRM, and assigns the WHOLE invoice to it. */
+        would_match_first: i.projs[0] ?? null,
+        shared_with_other_projects: i.projs.length > 1,
+      })),
+    });
+  }
+
   const apply = payload?.apply !== false;
   const started = new Date().toISOString();
 
