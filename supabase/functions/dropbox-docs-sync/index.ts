@@ -167,7 +167,7 @@ async function sb(path: string, init: RequestInit = {}) {
 
 async function runSync() {
   const started = new Date().toISOString();
-  const stats = { roots: ROOTS.length, files_seen: 0, deals_matched: 0, docs_upserted: 0, docs_removed: 0, links_created: 0, unmatched_folders: [] as string[] };
+  const stats = { roots: ROOTS.length, roots_missing: [] as string[], files_seen: 0, deals_matched: 0, docs_upserted: 0, docs_removed: 0, links_created: 0, unmatched_folders: [] as string[] };
 
   const deals: any[] = await sb("deals?select=id,project_no&project_no=not.is.null");
   const byNo = new Map<string, any>();
@@ -180,7 +180,11 @@ async function runSync() {
     let files: any[] = [];
     try { files = await listRoot(root); }
     catch (e: any) {
-      if (String(e.summary).includes("not_found")) continue; // root absent this year
+      // A missing root used to be skipped silently so an absent prior-year
+      // folder would not fail the run. That also swallowed a WRONG path: every
+      // root 404s, nothing is scanned, and the run still reports ok. Record it
+      // instead and let the caller decide.
+      if (String(e.summary).includes("not_found")) { stats.roots_missing.push(root); continue; }
       throw e;
     }
     stats.files_seen += files.length;
@@ -198,6 +202,21 @@ async function runSync() {
     }
   }
   stats.deals_matched = perDeal.size;
+
+  /* Nothing scanned means the paths are wrong, not that Dropbox is empty:
+     these folders always hold files. Fail loudly with the paths tried, so the
+     freshness indicator goes red instead of reporting a clean run over nothing.
+     `probe` (below) lists what Dropbox actually has at that level. */
+  if (stats.files_seen === 0) {
+    const miss = stats.roots_missing.length
+      ? `not found: ${stats.roots_missing.join(" | ")}`
+      : `roots exist but contain no files: ${ROOTS.join(" | ")}`;
+    throw new Error(
+      `Dropbox scan found no files — ${miss}. These are API paths relative to the ` +
+      `Dropbox root, which is not the local folder path. POST {"action":"probe"} ` +
+      `to this function to list the real top-level folders, then set ` +
+      `DROPBOX_PROJECTS_ROOTS accordingly.`);
+  }
 
   for (const [dealId, g] of perDeal) {
     const existing: any[] = await sb(`deal_documents?deal_id=eq.${dealId}&select=id,path_lower,url,link_kind`);
@@ -258,6 +277,21 @@ Deno.serve(async (req) => {
   if (!(await authorised(req))) return json({ error: "Unauthorized" }, 401);
   const started = new Date().toISOString();
   try {
+    /* Diagnostic: list a folder's immediate children so the correct API path
+       can be found without guessing. Read-only; writes nothing. */
+    let payload: any = {};
+    try { payload = await req.json(); } catch (_) { /* no body is fine */ }
+    if (payload && payload.action === "probe") {
+      const at = typeof payload.path === "string" ? payload.path : "";
+      const d = await dbx("files/list_folder", { path: at, limit: 200 });
+      return json({
+        ok: true, probed: at || "(Dropbox root)",
+        entries: (d.entries || []).map((e: any) => ({
+          name: e.name, path: e.path_display, kind: e[".tag"],
+        })),
+        configured_roots: ROOTS,
+      });
+    }
     const { stats } = await runSync();
     await recordRun("dropbox_docs", started, true, stats, null);
     return json({ ok: true, stats });
