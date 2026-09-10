@@ -714,7 +714,12 @@ async function boot(){
    never a crash. */
 let SYNC_RUNS=[];
 async function loadSyncStatus(){
-  try{ SYNC_RUNS=await api('sync_runs?select=job,finished_at,ok,error&order=finished_at.desc&limit=40')||[]; }
+  /* `stats` is required by the QuickBooks review panel, which renders from
+     stats.findings. It was omitted here when this query only fed the footer's
+     freshness dots, so the panel had nothing to read and reported every run as
+     predating structured findings. Fewer rows: the payload now carries a report
+     per row, and freshness only needs the newest of each job. */
+  try{ SYNC_RUNS=await api('sync_runs?select=job,finished_at,ok,error,stats&order=finished_at.desc&limit=12')||[]; }
   catch(e){ SYNC_RUNS=[]; }
   paintSyncStatus();
 }

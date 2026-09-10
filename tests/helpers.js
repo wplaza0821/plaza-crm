@@ -97,6 +97,18 @@ async function stubBackend(page, opts = {}) {
   // put: the money was still billed, it has just now been collected.
   if (opts.paidInFull) state.deals[2].qb_open_balance = 0;
   const captured = [];
+  /* PostgREST returns ONLY the columns named in select=. Returning every column
+     regardless let a real bug through: the app fetched sync_runs without
+     `stats`, so the QuickBooks panel had nothing to render, and the suite still
+     passed because the stub handed it stats anyway. Project the response to the
+     requested columns so a missing one fails here instead of in production. */
+  const project = (url, rows) => {
+    const sel = new URL(url).searchParams.get('select');
+    if (!sel || sel === '*' || !Array.isArray(rows)) return rows;
+    const cols = sel.split(',').map((c) => c.trim().split(':').pop()).filter((c) => c && c !== '*');
+    return rows.map((r) => Object.fromEntries(
+      cols.filter((c) => c in r).map((c) => [c, r[c]])));
+  };
   const json = (route, body, status = 200) =>
     route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
@@ -168,7 +180,7 @@ async function stubBackend(page, opts = {}) {
     if (url.pathname.startsWith('/rest/v1/sync_runs')) {
       if (opts.noSyncTable) return json(route, { message: 'relation "sync_runs" does not exist' }, 404);
       if (method === 'POST') { state.syncRuns.unshift({ ...body, id: state.nextId++ }); return json(route, [], 201); }
-      return json(route, state.syncRuns);
+      return json(route, project(req.url(), state.syncRuns));
     }
     // "Sync now" fires both jobs; qb-reconcile must be stubbed or it reads as a
     // failure. opts.qbSyncFails exercises the one-failed-one-succeeded path.
