@@ -664,29 +664,54 @@ Deno.serve(async (req) => {
 
   const payload = await req.json().catch(() => ({}));
 
-  /* Diagnostic: every invoice whose LINE descriptions mention a project number,
-     with the project numbers found on it and where the matcher sent it. Answers
-     "this was billed, why is the CRM saying it was not" without guesswork.
-     Read-only. */
+  /* Diagnostic. Answers "this WAS billed, why does the CRM say it was not" by
+     showing the raw invoice as QuickBooks holds it — every line description,
+     both memo fields, and any project-like token found anywhere in the record —
+     rather than only the fields the matcher happens to read. Read-only.
+
+       {"action":"trace","project_no":"26014"}      search everywhere for a token
+       {"action":"trace","customer":"terrazas"}     dump a customer's invoices
+  */
   if (payload?.action === "trace") {
     const want = String(payload.project_no || "").trim();
-    if (!want) return json({ error: "project_no required" }, 400);
+    const cust = String(payload.customer || "").trim().toLowerCase();
+    if (!want && !cust) return json({ error: "project_no or customer required" }, 400);
     const yrs = Array.isArray(payload.years) && payload.years.length
-      ? payload.years.map(Number) : [new Date().getFullYear(), new Date().getFullYear() - 1];
-    const invs = await fetchInvoices(yrs);
-    const hits = invs.filter((i) => i.projs.includes(want) ||
-      i.doc === want || i.cust.includes(want));
-    return json({
-      ok: true, project_no: want, years: yrs, invoices_scanned: invs.length,
-      matches: hits.map((i) => ({
-        doc: i.doc, date: i.date, customer: i.cust, amount: i.amt, balance: i.bal,
-        project_numbers_on_invoice: i.projs,
-        /* The matcher takes the FIRST project number in this (sorted) list that
-           exists in the CRM, and assigns the WHOLE invoice to it. */
-        would_match_first: i.projs[0] ?? null,
-        shared_with_other_projects: i.projs.length > 1,
-      })),
-    });
+      ? payload.years.map(Number)
+      : [new Date().getFullYear(), new Date().getFullYear() - 1];
+
+    const hits: any[] = [];
+    for (const yr of yrs) {
+      const rows = await qbQuery(
+        `SELECT * FROM Invoice WHERE TxnDate >= '${yr}-01-01' AND TxnDate <= '${yr}-12-31'`,
+        "Invoice");
+      for (const i of rows) {
+        const blob = JSON.stringify(i);
+        const custName = i.CustomerRef?.name ?? "";
+        /* Search the WHOLE record, not just the fields the matcher reads: that
+           is the point of the trace. */
+        const matched = (want && blob.includes(want)) ||
+                        (cust && custName.toLowerCase().includes(cust));
+        if (!matched) continue;
+        const lines = (i.Line ?? [])
+          .filter((l: any) => l.DetailType !== "SubTotalLineDetail")
+          .map((l: any) => ({ description: l.Description ?? null, amount: Number(l.Amount ?? 0) }));
+        const desc = lines.map((l: any) => l.description || "").join(" ");
+        hits.push({
+          doc: i.DocNumber, date: i.TxnDate, customer: custName,
+          total: Number(i.TotalAmt ?? 0), balance: Number(i.Balance ?? 0),
+          lines,
+          private_note: i.PrivateNote ?? null,
+          customer_memo: i.CustomerMemo?.value ?? null,
+          /* What the matcher currently sees (line descriptions only) versus
+             what a project-like token search finds across the whole record. */
+          projs_matcher_sees: [...new Set([...desc.matchAll(PROJ_RE)].map((m) => m[1]))].sort(),
+          projs_anywhere: [...new Set([...blob.matchAll(PROJ_RE)].map((m) => m[1]))].sort(),
+        });
+      }
+    }
+    return json({ ok: true, searched: { project_no: want || null, customer: cust || null, years: yrs },
+                  found: hits.length, invoices: hits });
   }
 
   const apply = payload?.apply !== false;
