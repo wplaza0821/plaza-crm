@@ -207,7 +207,7 @@ async function stubBackend(page, opts = {}) {
             total: 6500, balance: 0,
             lines: [{ description: '50% retainer for Proposal 26-101 - aquatic engineering', amount: 6500 }],
             projs_matcher_sees: ['26-101'], projs_anywhere: ['26-101'] },
-          { qb_id: '7811', doc: '5811', date: '2026-08-01', customer: 'NBV Assn',
+          { qb_id: '7811', doc: '5811', date: '2026-08-01', customer: opts.traceSecondCustomer || 'NBV Assn',
             total: 6500, balance: 0,
             lines: [{ description: 'Remaining balance for Proposal 26-101 - aquatic engineering', amount: 6500 }],
             projs_matcher_sees: ['26-101'], projs_anywhere: ['26-101'] },

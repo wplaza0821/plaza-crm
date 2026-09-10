@@ -1222,17 +1222,18 @@ function qbReview(v){
 
    Searching by client name on purpose, not by project number: if the project
    number were on the invoice the reconcile would already have matched it. */
-async function qbFind(dealId){
+async function qbFind(dealId,term){
   const d=DEALS.find(x=>x.id===dealId);
-  const who=(d&&(d.client||d.name)||'').trim();
+  const who=(term!==undefined?term:(d&&(d.client||d.name)||'')).trim();
   const tr=document.getElementById('qbs-'+dealId); if(!tr) return;
   const nx=tr.nextElementSibling;
-  if(nx&&nx.classList.contains('qb-find')){ nx.remove(); return; }
+  const existing=nx&&nx.classList.contains('qb-find')?nx:null;
+  if(existing&&term===undefined){ existing.remove(); return; }
   if(!who){ toast('This deal has no client name to search on',true); return; }
-  const row=document.createElement('tr');
+  const row=existing||document.createElement('tr');
   row.className='qb-find';
   row.innerHTML=`<td colspan="6"><div class="qb-none">Searching QuickBooks for “${esc(who)}”…</div></td>`;
-  tr.after(row);
+  if(!existing) tr.after(row);
   let res;
   try{ res=await callFn(FN_QB,{action:'trace',customer:who}); }
   catch(e){
@@ -1240,18 +1241,39 @@ async function qbFind(dealId){
     return;
   }
   const hits=(res&&res.invoices)||[];
+  /* An empty result is NOT proof the work was unbilled — it is equally
+     consistent with the CRM and QuickBooks spelling the client differently,
+     which is exactly what happened the first time this shipped. Say both, and
+     hand over a box to search by hand: one distinctive word is usually all it
+     takes, and nobody knows the naming better than the person reading this. */
   if(!hits.length){
-    row.innerHTML=`<td colspan="6"><div class="qb-none">No QuickBooks invoices at all for a customer
-      matching “${esc(who)}” in ${esc((res&&res.searched&&res.searched.years||[]).join(' or '))}.
-      This deal really has not been billed.</div></td>`;
+    row.innerHTML=`<td colspan="6">
+      <div class="qb-none">No QuickBooks invoice matched “${esc(who)}”
+        in ${esc(((res&&res.searched&&res.searched.years)||[]).join(' or '))}.
+        Either this deal really has not been billed, or QuickBooks files the client
+        under a different name. Try one distinctive word.</div>
+      <div class="qb-form-in" style="padding:0 13px 12px">
+        <input id="qbf-term" value="${esc(who)}" placeholder="Client name as QuickBooks spells it">
+        <button class="pri sm" onclick="qbFind(${dealId},document.getElementById('qbf-term').value)">Search again</button>
+      </div></td>`;
+    const box=row.querySelector('#qbf-term');
+    box.onkeydown=e=>{ if(e.key==='Enter') qbFind(dealId,box.value); };
+    box.focus(); box.select();
     return;
   }
   hits.sort((a,b)=>(a.date<b.date?1:-1));
-  let hh=`<div class="qb-none">${hits.length} invoice(s) for “${esc(who)}”. A number in
+  /* The customer column is not decoration. The search is deliberately fuzzy so
+     that a differently-spelled client still turns up, which means it can also
+     turn up a NEIGHBOURING client — and linking one of those would move real
+     money to the wrong deal. Showing the name QuickBooks holds is what makes
+     that visible before the Link button is pressed. */
+  const many=new Set(hits.map(x=>x.customer||'')).size>1;
+  let hh=`<div class="qb-none">${hits.length} invoice(s) matching “${esc(who)}”. A number in
       <b>cites</b> is the proposal the invoice text names — if it is not this deal's, that is
       why the money landed elsewhere. Link the ones that belong to
-      ${esc(d.project_no||'this deal')}.</div>
-    <div class="tbl-wrap"><table><thead><tr><th>Invoice</th><th>Date</th>
+      ${esc(d.project_no||'this deal')}.
+      ${many?'<b> The match is by name, and more than one customer came back — check the customer column before linking.</b>':''}</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th>
       <th>Line description</th><th>Cites</th><th class="num">Amount</th>
       <th class="num">Open</th><th></th></tr></thead><tbody>`;
   for(const inv of hits){
@@ -1265,6 +1287,7 @@ async function qbFind(dealId){
     hh+=`<tr id="qbi-${esc(String(inv.qb_id))}">
       <td><span class="pill pn">${esc(inv.doc||'')}</span></td>
       <td>${esc(inv.date||'')}</td>
+      <td${many?' class="err"':''}>${esc(inv.customer||'')}</td>
       <td class="qb-desc">${esc(desc)||'<i style="color:var(--gray-400)">no line description</i>'}</td>
       <td>${owner}</td>
       <td class="num">${money(inv.total)||'—'}</td>

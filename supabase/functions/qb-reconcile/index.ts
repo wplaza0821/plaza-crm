@@ -80,6 +80,15 @@ const STAGE_PINNED: Record<string, string> = {
    from being read as a project. */
 const PROJ_RE = /(?<!\$)\b(2[0-9]\d{3}|20\d{2}-\d{3})\b/g;
 
+/* Leading words too common in South Florida property names to identify a client
+   on their own. Used only by the trace's loose customer search. */
+const TRACE_GENERIC = new Set([
+  "ocean", "bay", "palm", "grand", "north", "south", "east", "west", "park",
+  "sunset", "coral", "gables", "beach", "harbour", "harbor", "island", "villas",
+  "tower", "towers", "club", "plaza", "point", "pointe", "vista", "marina",
+  "bayside", "seaside", "royal", "new", "old",
+]);
+
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-sync-secret",
@@ -738,6 +747,33 @@ Deno.serve(async (req) => {
   if (payload?.action === "trace") {
     const want = String(payload.project_no || "").trim();
     const cust = String(payload.customer || "").trim().toLowerCase();
+    /* Customer matching here is deliberately loose, and must stay that way.
+       This is a read-only diagnostic a human reads: showing a few invoices that
+       turn out to belong to a sibling costs a glance, whereas showing none
+       looks like proof the work was never billed — which is the exact wrong
+       answer, and the one that sent this search back empty the first time.
+
+       A plain substring test fails on the common shape: the CRM holds "Terrazas
+       River Park Village Condominium Association" and QuickBooks holds a
+       shorter or differently-suffixed name, so neither contains the other in
+       full. Test containment BOTH ways, then again after norm() has stripped
+       the condominium/association/LLC noise, then fall back to a shared leading
+       word — which is what actually distinguishes one client from the next. */
+    const custMatches = (qbName: string): boolean => {
+      const a = qbName.toLowerCase();
+      if (!cust) return false;
+      if (a.includes(cust) || cust.includes(a)) return true;
+      const na = norm(qbName), nb = norm(cust);
+      if (na && nb && (na.includes(nb) || nb.includes(na))) return true;
+      const wa = na.split(" ").filter(Boolean), wb = nb.split(" ").filter(Boolean);
+      if (!(wa[0] && wa[0] === wb[0] && wa[0].length >= 4)) return false;
+      /* A shared leading word only identifies a client when the word is
+         distinctive. Miami condominium names are built out of the same scenery
+         — "Ocean Reef Club" and "Ocean View Towers" are unrelated clients — so
+         a generic first word has to be backed by a second one. */
+      if (!TRACE_GENERIC.has(wa[0])) return true;
+      return !!(wa[1] && wa[1] === wb[1]);
+    };
     if (!want && !cust) return json({ error: "project_no or customer required" }, 400);
     const yrs = Array.isArray(payload.years) && payload.years.length
       ? payload.years.map(Number)
@@ -753,8 +789,7 @@ Deno.serve(async (req) => {
         const custName = i.CustomerRef?.name ?? "";
         /* Search the WHOLE record, not just the fields the matcher reads: that
            is the point of the trace. */
-        const matched = (want && blob.includes(want)) ||
-                        (cust && custName.toLowerCase().includes(cust));
+        const matched = (want && blob.includes(want)) || custMatches(custName);
         if (!matched) continue;
         const lines = (i.Line ?? [])
           .filter((l: any) => l.DetailType !== "SubTotalLineDetail")

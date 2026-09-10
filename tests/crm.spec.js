@@ -629,13 +629,53 @@ test('"Find invoices" reaches billing the unmapped list cannot show', async ({ p
   expect(errors).toEqual([]);
 });
 
-test('"Find invoices" says so plainly when there is genuinely no billing', async ({ page }) => {
-  await stubBackend(page, { traceHits: [] });
+test('a fuzzy search that spans two customers says so before anything is linked', async ({ page }) => {
+  /* The customer search is loose on purpose so a differently-spelled client
+     still turns up. The cost is that a neighbouring client can turn up too, and
+     linking one of those moves real money to the wrong deal — so the name
+     QuickBooks holds has to be on screen next to the Link button. */
+  await stubBackend(page, { traceSecondCustomer: 'Ocean View Towers Assn' });
   const errors = await bootCrm(page);
   await page.locator('#nav a[data-v="qb"]').click();
   await page.locator('#qbs-3 button', { hasText: 'Find invoices' }).click();
-  await expect(page.locator('tr.qb-find')).toContainText('really has not been billed');
+  const found = page.locator('tr.qb-find');
+  await expect(found).toContainText('more than one customer came back');
+  await expect(found).toContainText('Ocean View Towers Assn');
   expect(errors).toEqual([]);
+});
+
+test('an empty search offers a retry instead of declaring the work unbilled', async ({ page }) => {
+  /* The first cut asserted "really has not been billed" here, and that framing
+     was wrong: the trace matched a QuickBooks customer only when its name
+     CONTAINED the CRM client string in full, so a longer CRM name found nothing
+     and the panel called billed work unbilled. Both readings must be offered,
+     and the name must be editable. */
+  const { captured } = await stubBackend(page, { traceHits: [] });
+  const errors = await bootCrm(page);
+  await page.locator('#nav a[data-v="qb"]').click();
+  await page.locator('#qbs-3 button', { hasText: 'Find invoices' }).click();
+  const found = page.locator('tr.qb-find');
+  await expect(found).toContainText('files the client under a different name');
+  // prefilled with what was tried, so the correction is an edit not a retype
+  await expect(page.locator('#qbf-term')).toHaveValue('NBV Assn');
+  expect(captured.find((c) => c.body && c.body.action === 'trace').body.customer).toBe('NBV Assn');
+  expect(errors).toEqual([]);
+});
+
+test('searching again by hand replaces the result in place', async ({ page }) => {
+  const { captured } = await stubBackend(page, { traceHits: [] });
+  await bootCrm(page);
+  await page.locator('#nav a[data-v="qb"]').click();
+  await page.locator('#qbs-3 button', { hasText: 'Find invoices' }).click();
+  // the stub answers any term once traceHits is unset for the retry; here the
+  // point is that the typed term reaches the function and only one panel exists
+  await page.locator('#qbf-term').fill('north bay');
+  await page.locator('button', { hasText: 'Search again' }).click();
+  await expect.poll(() => captured.filter((c) => c.body && c.body.action === 'trace').length)
+    .toBe(2);
+  expect(captured.filter((c) => c.body && c.body.action === 'trace').pop().body.customer)
+    .toBe('north bay');
+  await expect(page.locator('tr.qb-find')).toHaveCount(1);
 });
 
 test('the QuickBooks panel still works when migration 010 has not been run', async ({ page }) => {
