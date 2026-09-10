@@ -69,7 +69,16 @@ const STAGE_PINNED: Record<string, string> = {
   "26021": "ECS Windows blanket SI — always-open, billed per opening",
 };
 
-const PROJ_RE = /\b(2[0-9]\d{3}|20\d{2}-\d{3})\b/g;
+/* Project numbers as Plaza writes them: a 5-digit 2xxxx ("26011") or the older
+   year-serial form ("2024-027").
+
+   The (?<!\$) guard is not hypothetical. A line description reading
+   "$20000 retainer" matches 2[0-9]\d{3} exactly, and the trace of the Terrazas
+   account showed 20000 being picked up as a project-like token from the raw
+   record. A dollar sign immediately before the digits never precedes a real
+   project number, so refusing that one case costs nothing and stops an amount
+   from being read as a project. */
+const PROJ_RE = /(?<!\$)\b(2[0-9]\d{3}|20\d{2}-\d{3})\b/g;
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -233,8 +242,17 @@ async function qbQuery(sql: string, entity: string): Promise<any[]> {
 type Inv = {
   id: string; doc: string; date: string; due: string | null;
   amt: number; bal: number; cust: string; projs: string[];
+  desc?: string;
   match?: string; confident?: boolean;
+  /** Set by a qb_invoice_links row with deal_id NULL: a human declared this
+   *  invoice to belong to no CRM deal, so it is neither matched nor reported. */
+  suppressed?: boolean;
 };
+
+/** A row of qb_invoice_links, keyed by QuickBooks Invoice.Id. See
+ *  migrations/010_qb_invoice_links.sql for why the override is per invoice and
+ *  not a per-deal alias. */
+type Link = { qb_invoice_id: string; deal_id: number | null; reason: string | null };
 
 async function fetchInvoices(years: number[]): Promise<Inv[]> {
   const out: Inv[] = [];
@@ -251,6 +269,10 @@ async function fetchInvoices(years: number[]): Promise<Inv[]> {
         id: i.Id, doc: i.DocNumber, date: i.TxnDate, due: i.DueDate ?? null,
         amt: Number(i.TotalAmt ?? 0), bal: Number(i.Balance ?? 0),
         cust: i.CustomerRef?.name ?? "", projs,
+        // Kept so the review panel can show what an unmapped invoice is FOR.
+        // A doc number and an amount are not enough to decide which deal it
+        // belongs to; the line text is the thing a human actually reads.
+        desc: desc.replace(/\s+/g, " ").trim().slice(0, 300),
       });
     }
   }
@@ -333,25 +355,52 @@ const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * invoice across the restoration AND the aquatic projects. Plaza's invoices
  * cite "PA Proposal No. 26028" in the line description, so a project-number
  * match is authoritative and self-documenting; only those drive writes.
+ *
+ * A qb_invoice_links row beats both. It records a human decision — "invoice
+ * 5755 is 26014's, whatever its lines say" — and is therefore confident, so it
+ * does drive writes. A link with a NULL deal_id declares an invoice to have no
+ * CRM deal at all; those are dropped from both maps and stop being reported.
  */
-function matchInvoices(invs: Inv[], deals: any[]): [Map<number, Inv[]>, Inv[]] {
+function matchInvoices(invs: Inv[], deals: any[], links: Link[] = []): [Map<number, Inv[]>, Inv[]] {
   const byPn = new Map<string, any>();
   for (const d of deals) {
     const pn = String(d.project_no ?? "").trim();
     if (pn) byPn.set(pn, d);
   }
   const norms = deals.map((d) => [d, norm(d.client), norm(d.name)] as const);
+  const byId = new Map<number, any>(deals.map((d) => [d.id, d]));
+  const linkByInv = new Map<string, Link>(links.map((l) => [String(l.qb_invoice_id), l]));
 
   const byDeal = new Map<number, Inv[]>();
   const unmapped: Inv[] = [];
   for (const inv of invs) {
     let deal: any = null;
-    for (const p of inv.projs) {
-      if (byPn.has(p)) {
-        deal = byPn.get(p);
-        inv.match = `project_no ${p}`;
+
+    /* A manual link outranks everything, including a project number the lines
+       do cite. That is the entire point: on the Terrazas invoices the cited
+       number is the one that is wrong. A link to a deal that has since been
+       deleted falls through to the normal rules rather than dropping the
+       invoice — the ON DELETE CASCADE removes the row, but a run that races
+       the delete must not lose money. */
+    const link = linkByInv.get(String(inv.id));
+    if (link) {
+      if (link.deal_id === null) { inv.suppressed = true; continue; }
+      const target = byId.get(Number(link.deal_id));
+      if (target) {
+        deal = target;
+        inv.match = `manual link${link.reason ? ` — ${link.reason}` : ""}`;
         inv.confident = true;
-        break;
+      }
+    }
+
+    if (!deal) {
+      for (const p of inv.projs) {
+        if (byPn.has(p)) {
+          deal = byPn.get(p);
+          inv.match = `project_no ${p}`;
+          inv.confident = true;
+          break;
+        }
       }
     }
     if (!deal) {
@@ -435,8 +484,16 @@ async function reconcile(apply: boolean) {
     "deals?select=id,project_no,name,client,stage,next_action," +
     "proposal_sent_date,last_contact_date,billed_to_date,qb_open_balance&order=id");
 
+  /* Manual overrides. A missing table (migration 010 not yet run) must not take
+     the whole reconcile down — it degrades to the pre-010 behaviour, which is
+     exactly what it did before this existed. */
+  let links: Link[] = [];
+  try {
+    links = await sb("qb_invoice_links?select=qb_invoice_id,deal_id,reason") || [];
+  } catch (_) { links = []; }
+
   const invs = await fetchInvoices(years);
-  const [byDeal, unmapped] = matchInvoices(invs, deals);
+  const [byDeal, unmapped] = matchInvoices(invs, deals, links);
   const dealsById = new Map<number, any>(deals.map((d) => [d.id, d]));
 
   const drift: any[] = [], review: any[] = [], billing: any[] = [];
@@ -530,7 +587,8 @@ async function reconcile(apply: boolean) {
     }
   }
 
-  return { deals, invs, byDeal, unmapped, drift, review, billing, staleWon, promoted, apply };
+  return { deals, invs, byDeal, unmapped, drift, review, billing, staleWon,
+           promoted, apply, links };
 }
 
 // ---------- report (same shape and order as the Python it replaces) ----------
@@ -671,6 +729,11 @@ Deno.serve(async (req) => {
 
        {"action":"trace","project_no":"26014"}      search everywhere for a token
        {"action":"trace","customer":"terrazas"}     dump a customer's invoices
+
+     Also the CRM's "Find invoices" button on a Won-but-never-invoiced row: it
+     traces the deal's client name so the invoice can be found and linked even
+     when it is already matched — wrongly — to another deal, which is precisely
+     the case the unmapped list cannot show.
   */
   if (payload?.action === "trace") {
     const want = String(payload.project_no || "").trim();
@@ -698,6 +761,9 @@ Deno.serve(async (req) => {
           .map((l: any) => ({ description: l.Description ?? null, amount: Number(l.Amount ?? 0) }));
         const desc = lines.map((l: any) => l.description || "").join(" ");
         hits.push({
+          // Invoice.Id, not DocNumber: it is the key qb_invoice_links uses, so
+          // the CRM can offer "link this one" straight off a trace result.
+          qb_id: i.Id,
           doc: i.DocNumber, date: i.TxnDate, customer: custName,
           total: Number(i.TotalAmt ?? 0), balance: Number(i.Balance ?? 0),
           lines,
@@ -729,6 +795,7 @@ Deno.serve(async (req) => {
       billing_refreshed: r.billing.length,
       needs_review: r.review.length,
       unmapped_invoices: r.unmapped.length,
+      manual_links: r.links.length,
       stale_won: r.staleWon.length,
       write_failures: failed,
       report,
@@ -747,15 +814,64 @@ Deno.serve(async (req) => {
           stage: x.cur, invoices: x.n, amount: x.amt, why: x.why,
         })),
         unmapped: (() => {
-          const byCust = new Map<string, { customer: string; invoices: number; billed: number; open: number }>();
+          type Row = {
+            customer: string; invoices: number; billed: number; open: number;
+            detail: any[]; more: number;
+          };
+          const byCust = new Map<string, Row>();
           for (const inv of r.unmapped as any[]) {
             const k = String(inv.cust || "(no customer)");
-            const e = byCust.get(k) ?? { customer: k, invoices: 0, billed: 0, open: 0 };
+            const e = byCust.get(k) ??
+              { customer: k, invoices: 0, billed: 0, open: 0, detail: [], more: 0 };
             e.invoices++; e.billed += Number(inv.amt) || 0; e.open += Number(inv.bal) || 0;
+            e.detail.push({
+              qb_id: inv.id, doc: inv.doc, date: inv.date,
+              amt: Number(inv.amt) || 0, bal: Number(inv.bal) || 0,
+              // The trimmed line text. Without it the review panel can only
+              // offer "invoice 5741, $5,700" and nobody can tell which deal
+              // that is; with it the answer is usually obvious on sight.
+              desc: String(inv.desc || "").slice(0, 160),
+              projs: inv.projs || [],
+            });
             byCust.set(k, e);
+          }
+          /* Every unmapped invoice is individually linkable from the panel, so
+             the detail has to be here — but stats is a jsonb column written on
+             every run and kept forever, and the historic book has hundreds of
+             these. Cap per customer, biggest open balance first (the ones that
+             cost money to ignore), and say how many were withheld. */
+          const CAP = 20;
+          for (const e of byCust.values()) {
+            e.detail.sort((a, b) => b.bal - a.bal || (a.date < b.date ? 1 : -1));
+            if (e.detail.length > CAP) {
+              e.more = e.detail.length - CAP;
+              e.detail = e.detail.slice(0, CAP);
+            }
           }
           return [...byCust.values()].sort((a, b) => b.open - a.open || b.billed - a.billed);
         })(),
+        /* Manual overrides in force, so the panel can show what has been
+           corrected by hand and let it be undone. Attribution matters here:
+           these are the numbers no invoice text supports. */
+        links: (r.links as Link[]).map((l) => {
+          const inv = (r.invs as Inv[]).find((x) => String(x.id) === String(l.qb_invoice_id));
+          const d = (r.deals as any[]).find((x) => x.id === l.deal_id);
+          return {
+            qb_invoice_id: l.qb_invoice_id,
+            doc: inv?.doc ?? null,
+            date: inv?.date ?? null,
+            amt: inv?.amt ?? null,
+            bal: inv?.bal ?? null,
+            deal_id: l.deal_id,
+            project_no: d?.project_no ?? null,
+            deal_name: d?.name ?? null,
+            reason: l.reason ?? null,
+            // A link whose invoice is outside the two-year window, or whose
+            // deal was deleted, is dead weight — say so rather than showing a
+            // row of nulls.
+            stale: !inv ? "invoice not in range" : (l.deal_id !== null && !d ? "deal missing" : null),
+          };
+        }),
       },
     };
     await recordRun(started, failed === 0, stats, failed ? `${failed} write(s) failed` : null);

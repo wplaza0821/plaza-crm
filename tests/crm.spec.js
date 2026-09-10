@@ -527,6 +527,126 @@ test('QuickBooks review surfaces what the reconcile found', async ({ page }) => 
   expect(errors).toEqual([]);
 });
 
+/* ---------------- manual invoice links (migration 010) ----------------
+   The reconcile matches an invoice to a deal by the project number printed in
+   its line descriptions. When the invoice prints the wrong number — the
+   Terrazas Aquatic case, billed and paid under the sibling proposal's number —
+   nothing in the CRM could correct it, and the deal read "never invoiced"
+   forever. These cover the correction path end to end. */
+
+test('an unmapped customer opens to the invoices it is made of', async ({ page }) => {
+  await stubBackend(page);
+  const errors = await bootCrm(page);
+  await page.locator('#nav a[data-v="qb"]').click();
+  const bridge = page.locator('details.qb-cust', { hasText: 'Bridge Industrial' });
+  // customers with money still open are expanded already: those are the ones
+  // that cost something to ignore
+  await expect(bridge).toHaveAttribute('open', '');
+  await expect(bridge).toContainText('5741');
+  // the line text is the thing that says which deal an invoice belongs to
+  await expect(bridge).toContainText('Change of Engineer fee');
+  // fully-collected history stays collapsed, and says how much it withheld
+  const venetian = page.locator('details.qb-cust', { hasText: 'Venetian Manor' });
+  await expect(venetian).not.toHaveAttribute('open', '');
+  await venetian.locator('summary').click();
+  await expect(venetian).toContainText('1 more invoice(s)');
+  expect(errors).toEqual([]);
+});
+
+test('linking an unmapped invoice records the override and shows it', async ({ page }) => {
+  const { captured } = await stubBackend(page);
+  const errors = await bootCrm(page);
+  await page.locator('#nav a[data-v="qb"]').click();
+  const row = page.locator('#qbi-9002');
+  await row.locator('button', { hasText: 'Link' }).click();
+  await page.locator('#qbl-deal').selectOption('3');
+  await page.locator('#qbl-why').fill('no project number on the invoice');
+  await page.locator('button', { hasText: 'Save link' }).click();
+  await expect(row).toContainText('linked');
+  const post = captured.find((c) => c.method === 'POST' && c.path.startsWith('/rest/v1/qb_invoice_links'));
+  expect(post.body).toMatchObject({
+    qb_invoice_id: '9002', doc_number: '5741', deal_id: 3,
+    reason: 'no project number on the invoice',
+  });
+  // upsert, not insert: relinking an invoice must correct the existing row
+  // rather than collide on the primary key
+  expect(post.headers.prefer).toContain('resolution=merge-duplicates');
+  expect(errors).toEqual([]);
+});
+
+test('an invoice can be declared to belong to no deal at all', async ({ page }) => {
+  const { captured } = await stubBackend(page);
+  await bootCrm(page);
+  await page.locator('#nav a[data-v="qb"]').click();
+  await page.locator('#qbi-9002 button', { hasText: 'Link' }).click();
+  await page.locator('#qbl-deal').selectOption('none');
+  await page.locator('button', { hasText: 'Save link' }).click();
+  const post = captured.find((c) => c.method === 'POST' && c.path.startsWith('/rest/v1/qb_invoice_links'));
+  expect(post.body.deal_id).toBeNull();
+});
+
+test('existing links are listed and can be removed', async ({ page }) => {
+  const { captured } = await stubBackend(page, {
+    qbLinks: [{ qb_invoice_id: '7755', doc_number: '5755', deal_id: 3,
+                reason: 'invoice cites 26-101, work is 26-103' }],
+  });
+  const errors = await bootCrm(page);
+  await page.locator('#nav a[data-v="qb"]').click();
+  const view = page.locator('#view');
+  await expect(view).toContainText('Manual invoice links — 1');
+  await expect(view).toContainText('invoice cites 26-101, work is 26-103');
+  await expect(view).toContainText('North Bay Villas');
+  await view.locator('button', { hasText: 'Remove' }).click();
+  await expect(view).not.toContainText('Manual invoice links');
+  expect(captured.some((c) => c.method === 'DELETE'
+    && c.path.includes('qb_invoice_links?qb_invoice_id=eq.7755'))).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('"Find invoices" reaches billing the unmapped list cannot show', async ({ page }) => {
+  const { captured } = await stubBackend(page);
+  const errors = await bootCrm(page);
+  await page.locator('#nav a[data-v="qb"]').click();
+  await page.locator('#qbs-3 button', { hasText: 'Find invoices' }).click();
+  const found = page.locator('tr.qb-find');
+  await expect(found).toContainText('5755');
+  await expect(found).toContainText('5811');
+  // and it names WHY the money went elsewhere: the invoice cites a sibling
+  await expect(found).toContainText('26-101');
+  await expect(found).toContainText('aquatic engineering');
+  // searched by client name — the project number is precisely what is missing
+  const trace = captured.find((c) => c.body && c.body.action === 'trace');
+  expect(trace.body.customer).toBe('NBV Assn');
+
+  // linking from here preselects the deal the search started from
+  await page.locator('#qbi-7755 button', { hasText: 'Link' }).click();
+  await expect(page.locator('#qbl-deal')).toHaveValue('3');
+  await page.locator('button', { hasText: 'Save link' }).click();
+  await expect(page.locator('#qbi-7755')).toContainText('linked');
+  // the second invoice is still listed: a repaint here would have closed the
+  // panel and this deal needs both invoices linked
+  await expect(page.locator('#qbi-7811')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('"Find invoices" says so plainly when there is genuinely no billing', async ({ page }) => {
+  await stubBackend(page, { traceHits: [] });
+  const errors = await bootCrm(page);
+  await page.locator('#nav a[data-v="qb"]').click();
+  await page.locator('#qbs-3 button', { hasText: 'Find invoices' }).click();
+  await expect(page.locator('tr.qb-find')).toContainText('really has not been billed');
+  expect(errors).toEqual([]);
+});
+
+test('the QuickBooks panel still works when migration 010 has not been run', async ({ page }) => {
+  await stubBackend(page, { noLinkTable: true });
+  const errors = await bootCrm(page);
+  await page.locator('#nav a[data-v="qb"]').click();
+  await expect(page.locator('#view')).toContainText('Won but never invoiced — 1');
+  await expect(page.locator('#view')).not.toContainText('Manual invoice links');
+  expect(errors).toEqual([]);
+});
+
 test('A/R KPI reports deals never invoiced, not deals never checked', async ({ page }) => {
   await stubBackend(page);
   await bootCrm(page);

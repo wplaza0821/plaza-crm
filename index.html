@@ -181,6 +181,32 @@ td .nm{font-weight:600;color:var(--black)}
 td .cl{font-size:11.5px;color:var(--gray-500)}
 .num{text-align:right;font-variant-numeric:tabular-nums}
 
+/* ---------- QuickBooks review: unmapped invoices ----------
+   One <details> per customer. Collapsed by default so 48 customers stay
+   scannable; the ones with money still open are opened by the renderer, since
+   those are the only rows that cost anything to ignore. */
+.qb-cust{background:#FFFFFF;border:1px solid var(--gray-200);border-radius:var(--radius);
+  margin-bottom:8px;overflow:hidden}
+.qb-cust>summary{padding:10px 13px;cursor:pointer;display:flex;gap:12px;align-items:baseline;
+  flex-wrap:wrap;list-style:none}
+.qb-cust>summary::-webkit-details-marker{display:none}
+.qb-cust>summary:hover{background:var(--gray-50)}
+.qb-cust>summary::before{content:"\25B8";color:var(--gray-400);font-size:11px;
+  transition:transform .15s ease;display:inline-block}
+.qb-cust[open]>summary::before{transform:rotate(90deg)}
+.qb-cust-n{font-weight:600;font-size:13px}
+.qb-cust-m{font-size:11.5px;color:var(--gray-500);margin-left:auto}
+.qb-cust .tbl-wrap{border:0;border-top:1px solid var(--gray-200);border-radius:0}
+.qb-cust tbody tr{cursor:default}
+.qb-desc{font-size:12px;color:var(--gray-700);max-width:420px}
+.qb-none{padding:10px 13px;font-size:12px;color:var(--gray-500);
+  border-top:1px solid var(--gray-200)}
+.qb-linked{font-size:11.5px;color:var(--accent);font-weight:600}
+.qb-form-in{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:2px 0}
+.qb-form-in select{flex:1 1 260px;min-width:0}
+.qb-form-in input{flex:1 1 240px;min-width:0}
+tr.qb-form td{background:var(--gray-50)}
+
 /* ---------- record drawer ---------- */
 .scrim{position:fixed;inset:0;background:rgba(2,0,0,.32);z-index:60;display:none}
 .scrim.on{display:block}
@@ -724,6 +750,18 @@ async function loadSyncStatus(){
   paintSyncStatus();
 }
 function latestRun(job){ return SYNC_RUNS.find(r=>r.job===job)||null; }
+/* ---------- manual invoice → deal overrides ----------
+   Read live from the table rather than from the last run's findings, because a
+   link made here has to show its effect immediately; the reconcile only rewrites
+   findings on its next run, which may be tomorrow. See
+   migrations/010_qb_invoice_links.sql for why an override is per invoice.
+   Missing table (migration not run) = no links, never a crash. */
+let QB_LINKS=[];
+async function loadQbLinks(){
+  try{ QB_LINKS=await api('qb_invoice_links?select=qb_invoice_id,doc_number,deal_id,reason&order=created_at.desc')||[]; }
+  catch(e){ QB_LINKS=[]; }
+}
+const qbLinkFor=id=>QB_LINKS.find(l=>String(l.qb_invoice_id)===String(id))||null;
 function ageClass(iso){
   if(!iso) return 'crit';
   const h=(Date.now()-new Date(iso).getTime())/36e5;
@@ -908,6 +946,7 @@ async function load(){
       d.doc_url=p?p.primary_url:null;});
   }catch(e){console.warn('doc counts unavailable',e.message);}
   await loadSyncStatus();
+  await loadQbLinks();
   DEALS.forEach(d=>{
     d.days_since_contact=days(d.last_contact_date);
     d.days_since_proposal=days(d.proposal_sent_date);
@@ -1062,15 +1101,18 @@ function qbReview(v){
         this project number.</div></div>`;
   if(stale.length){
     h+=`<div class="tbl-wrap"><table><thead><tr><th>Project</th><th>Deal</th>
-        <th>Proposal sent</th><th class="num">Days</th><th class="num">Contract</th></tr></thead><tbody>`;
+        <th>Proposal sent</th><th class="num">Days</th><th class="num">Contract</th>
+        <th></th></tr></thead><tbody>`;
     for(const x of stale){
       const d=DEALS.find(y=>y.id===x.id);
-      h+=`<tr${d?` onclick="open_(${x.id})" style="cursor:pointer"`:''}>
+      h+=`<tr id="qbs-${x.id}">
         <td><span class="pill pn">${esc(x.project_no||'—')}</span></td>
-        <td><div class="nm">${esc(x.name||'')}</div><div class="cl">${esc(x.client||'')}</div></td>
+        <td${d?` onclick="open_(${x.id})" style="cursor:pointer"`:''}>
+          <div class="nm">${esc(x.name||'')}</div><div class="cl">${esc(x.client||'')}</div></td>
         <td>${esc(x.proposal_sent_date||'n/a')}</td>
         <td class="num">${x.days==null?'—':`<span class="${x.days>90?'err':''}">${x.days}d</span>`}</td>
-        <td class="num">${d?money(dealParts(d).total)||'—':'—'}</td></tr>`;
+        <td class="num">${d?money(dealParts(d).total)||'—':'—'}</td>
+        <td class="num"><button class="sm" onclick="qbFind(${x.id})">Find invoices</button></td></tr>`;
     }
     h+='</tbody></table></div>';
   }
@@ -1098,25 +1140,207 @@ function qbReview(v){
   }
 
   /* Invoices with no deal: mostly historic billing, but the open column is A/R
-     the CRM cannot see, so it leads. */
+     the CRM cannot see, so it leads. Each customer opens to its actual
+     invoices, because "48 unmapped customers" is not something anyone can act
+     on — the line description is what tells you which deal an invoice is for,
+     and the Link button next to it is how that answer gets recorded. */
   h+=`<div class="callout" style="border-left:3px solid ${unmappedOpen?'var(--red)':'var(--accent)'};margin:18px 0 10px">
       <b>QuickBooks invoices with no deal — ${unmapped.length} customer(s)</b>
       <div style="font-size:11.5px;color:var(--gray-500);margin-top:2px">
         ${money(unmappedBilled)} billed, <b>${money(unmappedOpen)||'$0'} still open</b>.
         Matching is by project number only — a name match would merge sibling projects
-        and corrupt the figures. Open balances here are receivable the CRM is not counting.</div></div>`;
-  if(unmapped.length){
-    h+=`<div class="tbl-wrap"><table><thead><tr><th>QuickBooks customer</th>
-        <th class="num">Invoices</th><th class="num">Billed</th><th class="num">Open</th></tr></thead><tbody>`;
-    for(const x of unmapped){
-      h+=`<tr><td>${esc(x.customer||'')}</td>
-        <td class="num">${x.invoices||0}</td>
-        <td class="num">${money(x.billed)||'—'}</td>
-        <td class="num">${x.open?`<b class="err">${money(x.open)}</b>`:'—'}</td></tr>`;
+        and corrupt the figures. Open balances here are receivable the CRM is not counting.
+        Open a customer to link an invoice to a deal by hand.</div></div>`;
+  for(const x of unmapped){
+    const det=x.detail||[];
+    h+=`<details class="qb-cust"${x.open?' open':''}><summary>
+        <span class="qb-cust-n">${esc(x.customer||'')}</span>
+        <span class="qb-cust-m">${x.invoices||0} invoice${x.invoices===1?'':'s'} ·
+          ${money(x.billed)||'$0'} billed ·
+          ${x.open?`<b class="err">${money(x.open)} open</b>`:'nothing open'}</span>
+      </summary>`;
+    if(!det.length){
+      h+=`<div class="qb-none">This run recorded no invoice detail for ${esc(x.customer||'')}.
+        Deploy the current qb-reconcile and run it again.</div>`;
+    }else{
+      h+=`<div class="tbl-wrap"><table><thead><tr><th>Invoice</th><th>Date</th>
+          <th>Line description</th><th class="num">Amount</th><th class="num">Open</th>
+          <th></th></tr></thead><tbody>`;
+      for(const inv of det){
+        const lk=qbLinkFor(inv.qb_id);
+        h+=`<tr id="qbi-${esc(String(inv.qb_id))}">
+          <td><span class="pill pn">${esc(inv.doc||inv.qb_id||'—')}</span></td>
+          <td>${esc(inv.date||'')}</td>
+          <td class="qb-desc">${esc(inv.desc||'')||'<i style="color:var(--gray-400)">no line description</i>'}</td>
+          <td class="num">${money(inv.amt)||'—'}</td>
+          <td class="num">${inv.bal?`<b class="err">${money(inv.bal)}</b>`:'—'}</td>
+          <td class="num">${lk
+            ? `<span class="qb-linked">linked</span>`
+            : `<button class="sm" onclick="qbLinkForm('${esc(String(inv.qb_id))}','${esc(String(inv.doc||''))}')">Link…</button>`}</td></tr>`;
+      }
+      h+='</tbody></table></div>';
+      if(x.more) h+=`<div class="qb-none">${x.more} more invoice(s) for this customer not shown
+        — the largest open balances are listed first.</div>`;
+    }
+    h+='</details>';
+  }
+
+  /* Manual overrides. Shown even when empty is pointless, but shown whenever
+     any exist is essential: these are the only figures in the reconcile that no
+     invoice text supports, so they have to be visible and reversible. */
+  if(QB_LINKS.length){
+    h+=`<div class="callout" style="border-left:3px solid var(--accent);margin:18px 0 10px">
+        <b>Manual invoice links — ${QB_LINKS.length}</b>
+        <div style="font-size:11.5px;color:var(--gray-500);margin-top:2px">
+          Corrections made by hand. Each one overrides the project number the invoice
+          itself cites, and the next reconcile treats it as fact.</div></div>`;
+    h+=`<div class="tbl-wrap"><table><thead><tr><th>Invoice</th><th>Assigned to</th>
+        <th>Reason</th><th></th></tr></thead><tbody>`;
+    for(const l of QB_LINKS){
+      const d=l.deal_id==null?null:DEALS.find(y=>y.id===l.deal_id);
+      h+=`<tr>
+        <td><span class="pill pn">${esc(l.doc_number||l.qb_invoice_id)}</span></td>
+        <td>${l.deal_id==null
+          ? '<i style="color:var(--gray-500)">no deal — excluded on purpose</i>'
+          : (d?`<div class="nm">${esc(d.project_no||'—')} ${esc(d.name||'')}</div>`
+              :`<i class="err">deal ${l.deal_id} no longer exists</i>`)}</td>
+        <td style="font-size:12px;color:var(--gray-500)">${esc(l.reason||'')}</td>
+        <td class="num"><button class="sm" onclick="qbUnlink('${esc(String(l.qb_invoice_id))}')">Remove</button></td></tr>`;
     }
     h+='</tbody></table></div>';
   }
   v.innerHTML=h;
+}
+
+/* ---------- "Won but never invoiced": go and look ----------
+   The unmapped list cannot help here. An invoice that IS matched — to the wrong
+   deal — never appears in it, and that is the common case: Terrazas Aquatic
+   (26014) was billed $13,000 on invoices whose lines read "Proposal 26011", so
+   the money is real, credited, and credited to the sibling project. The only
+   way to see that from the CRM is to ask QuickBooks for the client's invoices
+   directly, which is what qb-reconcile's read-only `trace` does.
+
+   Searching by client name on purpose, not by project number: if the project
+   number were on the invoice the reconcile would already have matched it. */
+async function qbFind(dealId){
+  const d=DEALS.find(x=>x.id===dealId);
+  const who=(d&&(d.client||d.name)||'').trim();
+  const tr=document.getElementById('qbs-'+dealId); if(!tr) return;
+  const nx=tr.nextElementSibling;
+  if(nx&&nx.classList.contains('qb-find')){ nx.remove(); return; }
+  if(!who){ toast('This deal has no client name to search on',true); return; }
+  const row=document.createElement('tr');
+  row.className='qb-find';
+  row.innerHTML=`<td colspan="6"><div class="qb-none">Searching QuickBooks for “${esc(who)}”…</div></td>`;
+  tr.after(row);
+  let res;
+  try{ res=await callFn(FN_QB,{action:'trace',customer:who}); }
+  catch(e){
+    row.innerHTML=`<td colspan="6"><div class="qb-none err">Could not search QuickBooks: ${esc(e.message)}</div></td>`;
+    return;
+  }
+  const hits=(res&&res.invoices)||[];
+  if(!hits.length){
+    row.innerHTML=`<td colspan="6"><div class="qb-none">No QuickBooks invoices at all for a customer
+      matching “${esc(who)}” in ${esc((res&&res.searched&&res.searched.years||[]).join(' or '))}.
+      This deal really has not been billed.</div></td>`;
+    return;
+  }
+  hits.sort((a,b)=>(a.date<b.date?1:-1));
+  let hh=`<div class="qb-none">${hits.length} invoice(s) for “${esc(who)}”. A number in
+      <b>cites</b> is the proposal the invoice text names — if it is not this deal's, that is
+      why the money landed elsewhere. Link the ones that belong to
+      ${esc(d.project_no||'this deal')}.</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Invoice</th><th>Date</th>
+      <th>Line description</th><th>Cites</th><th class="num">Amount</th>
+      <th class="num">Open</th><th></th></tr></thead><tbody>`;
+  for(const inv of hits){
+    const desc=(inv.lines||[]).map(l=>l.description||'').filter(Boolean).join(' · ');
+    const cites=(inv.projs_matcher_sees||[]);
+    const lk=qbLinkFor(inv.qb_id);
+    const owner=cites.map(pn=>{
+      const o=DEALS.find(y=>String(y.project_no)===String(pn));
+      return `<span class="pill pn" title="${o?esc(o.name||''):'no CRM deal with this number'}">${esc(pn)}</span>`;
+    }).join(' ')||'<i style="color:var(--gray-400)">none</i>';
+    hh+=`<tr id="qbi-${esc(String(inv.qb_id))}">
+      <td><span class="pill pn">${esc(inv.doc||'')}</span></td>
+      <td>${esc(inv.date||'')}</td>
+      <td class="qb-desc">${esc(desc)||'<i style="color:var(--gray-400)">no line description</i>'}</td>
+      <td>${owner}</td>
+      <td class="num">${money(inv.total)||'—'}</td>
+      <td class="num">${inv.balance?`<b class="err">${money(inv.balance)}</b>`:'—'}</td>
+      <td class="num">${lk
+        ? `<span class="qb-linked">linked</span>`
+        : `<button class="sm" onclick="qbLinkForm('${esc(String(inv.qb_id))}','${esc(String(inv.doc||''))}',${dealId})">Link…</button>`}</td></tr>`;
+  }
+  hh+='</tbody></table></div>';
+  row.innerHTML=`<td colspan="6">${hh}</td>`;
+}
+
+/* Inline editor for one invoice. Deliberately not a modal: the row above it is
+   the evidence you are deciding from, and a modal would cover it. `preselect`
+   is the deal the search was launched from — the answer is almost always that
+   one, so it is chosen already and Save is a single click. */
+function qbLinkForm(qbId,doc,preselect){
+  const tr=document.getElementById('qbi-'+qbId); if(!tr) return;
+  if(tr.nextElementSibling&&tr.nextElementSibling.classList.contains('qb-form')){
+    tr.nextElementSibling.remove(); return;
+  }
+  const opts=DEALS.slice()
+    .sort((a,b)=>String(a.project_no||'zzz').localeCompare(String(b.project_no||'zzz')))
+    .map(d=>`<option value="${d.id}">${esc(d.project_no||'—')} · ${esc(d.name||'')}${d.client?' · '+esc(d.client):''}</option>`)
+    .join('');
+  const row=document.createElement('tr');
+  row.className='qb-form';
+  row.innerHTML=`<td colspan="${tr.children.length}"><div class="qb-form-in">
+      <select id="qbl-deal">
+        <option value="">— choose a deal —</option>
+        ${opts}
+        <option value="none">— no deal: stop reporting this invoice —</option>
+      </select>
+      <input id="qbl-why" placeholder="Why (e.g. invoice cites 26011, work is 26014)" maxlength="200">
+      <button class="pri sm" onclick="qbSaveLink('${esc(qbId)}','${esc(doc||'')}')">Save link</button>
+      <button class="sm" onclick="this.closest('tr').remove()">Cancel</button>
+    </div></td>`;
+  tr.after(row);
+  const sel=row.querySelector('#qbl-deal');
+  if(preselect!=null) sel.value=String(preselect);
+  sel.focus();
+}
+async function qbSaveLink(qbId,doc){
+  const sel=document.getElementById('qbl-deal'), why=document.getElementById('qbl-why');
+  if(!sel) return;
+  const v=sel.value;
+  if(!v){ toast('Choose a deal first',true); return; }
+  const body={qb_invoice_id:String(qbId), doc_number:doc||null,
+    deal_id:v==='none'?null:Number(v), reason:(why&&why.value.trim())||null};
+  try{
+    /* Upsert: relinking an invoice already linked must correct it, not fail on
+       the primary key. */
+    await api('qb_invoice_links',{method:'POST',
+      headers:{'Prefer':'return=representation,resolution=merge-duplicates'},
+      body:JSON.stringify(body)});
+    await loadQbLinks();
+    toast(v==='none'?'Invoice excluded':'Invoice linked — run Sync now to apply it');
+    /* Update the one row in place rather than repainting. A deal usually needs
+       more than one invoice linked (Terrazas Aquatic needed two), and a full
+       repaint closes the search panel the invoices are listed in. */
+    const tr=document.getElementById('qbi-'+qbId);
+    const form=document.querySelector('tr.qb-form');
+    if(form) form.remove();
+    if(tr){
+      const cell=tr.lastElementChild;
+      if(cell) cell.innerHTML='<span class="qb-linked">linked</span>';
+    }else{ renderView(); }
+  }catch(e){ toast('Could not save link: '+e.message,true); }
+}
+async function qbUnlink(qbId){
+  try{
+    await api('qb_invoice_links?qb_invoice_id=eq.'+encodeURIComponent(qbId),{method:'DELETE'});
+    await loadQbLinks();
+    toast('Link removed — run Sync now to apply it');
+    renderView();
+  }catch(e){ toast('Could not remove link: '+e.message,true); }
 }
 
 /* kanban board */

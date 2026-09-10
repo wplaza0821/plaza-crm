@@ -69,6 +69,7 @@ function fixtureDocs() {
 // opts.dropboxDown simulates the edge function not being deployed.
 async function stubBackend(page, opts = {}) {
   const state = { deals: fixtureDeals(), docs: fixtureDocs(), activities: [], nextId: 100,
+    qbLinks: opts.qbLinks ? opts.qbLinks.slice() : [],
     syncRuns: opts.syncRuns || [
       { job: 'dropbox_docs', finished_at: new Date(Date.now() - 6 * 36e5).toISOString(), ok: true },
       { job: 'qb_reconcile', finished_at: new Date(Date.now() - 3 * 36e5).toISOString(), ok: true,
@@ -84,9 +85,18 @@ async function stubBackend(page, opts = {}) {
                 invoices: 1, amount: 3500, why: 'customer-name match only, may include sibling projects' },
             ],
             unmapped: [
-              { customer: 'Venetian Manor Condominium Association', invoices: 21, billed: 1290423, open: 0 },
-              { customer: 'Bridge Industrial', invoices: 1, billed: 3600, open: 3600 },
+              { customer: 'Venetian Manor Condominium Association', invoices: 21, billed: 1290423, open: 0,
+                more: 1, detail: [
+                  { qb_id: '9001', doc: '5612', date: '2026-02-14', amt: 61000, bal: 0,
+                    desc: 'Progress billing, facade restoration', projs: [] },
+                ] },
+              { customer: 'Bridge Industrial', invoices: 1, billed: 3600, open: 3600,
+                more: 0, detail: [
+                  { qb_id: '9002', doc: '5741', date: '2026-06-02', amt: 3600, bal: 3600,
+                    desc: 'Change of Engineer fee due to structural subconsultant', projs: [] },
+                ] },
             ],
+            links: [],
           },
         } },
     ] };
@@ -118,7 +128,7 @@ async function stubBackend(page, opts = {}) {
     const method = req.method();
     let body = null;
     try { body = req.postData() ? JSON.parse(req.postData()) : null; } catch (e) {}
-    if (method !== 'GET') captured.push({ method, path: url.pathname + url.search, body });
+    if (method !== 'GET') captured.push({ method, path: url.pathname + url.search, body, headers: req.headers() });
 
     if (url.pathname.startsWith('/auth/v1/user')) return json(route, { email: 'test@plaza.test' });
     if (url.pathname.startsWith('/auth/v1/token'))
@@ -185,6 +195,26 @@ async function stubBackend(page, opts = {}) {
     // "Sync now" fires both jobs; qb-reconcile must be stubbed or it reads as a
     // failure. opts.qbSyncFails exercises the one-failed-one-succeeded path.
     if (url.pathname.startsWith('/functions/v1/qb-reconcile')) {
+      /* The read-only diagnostic behind "Find invoices". The default answer is
+         modelled on the real Terrazas case: the deal's own number appears on no
+         invoice, while two invoices for the same client cite a SIBLING project
+         number — which is why the money never reached this deal and why the
+         unmapped list cannot show it. */
+      if (body?.action === 'trace') {
+        if (opts.traceFails) return json(route, { error: 'Intuit token rejected' }, 500);
+        const hits = opts.traceHits !== undefined ? opts.traceHits : [
+          { qb_id: '7755', doc: '5755', date: '2026-05-04', customer: 'NBV Assn',
+            total: 6500, balance: 0,
+            lines: [{ description: '50% retainer for Proposal 26-101 - aquatic engineering', amount: 6500 }],
+            projs_matcher_sees: ['26-101'], projs_anywhere: ['26-101'] },
+          { qb_id: '7811', doc: '5811', date: '2026-08-01', customer: 'NBV Assn',
+            total: 6500, balance: 0,
+            lines: [{ description: 'Remaining balance for Proposal 26-101 - aquatic engineering', amount: 6500 }],
+            projs_matcher_sees: ['26-101'], projs_anywhere: ['26-101'] },
+        ];
+        return json(route, { ok: true, searched: { customer: body.customer, years: [2026, 2025] },
+          found: hits.length, invoices: hits });
+      }
       if (opts.qbSyncFails) return json(route, { ok: false, error: 'Intuit token rejected' }, 500);
       state.syncRuns.unshift({ job: 'qb_reconcile', finished_at: new Date().toISOString(), ok: true });
       return json(route, { ok: true, stats: { billing_refreshed: 2, stage_changes: 1, invoices: 198 } });
@@ -193,6 +223,22 @@ async function stubBackend(page, opts = {}) {
       if (opts.dropboxDown) return json(route, { error: 'Function not found' }, 404);
       state.syncRuns.unshift({ job: 'dropbox_docs', finished_at: new Date().toISOString(), ok: true });
       return json(route, { ok: true, stats: { deals_matched: 3, docs_upserted: 5, docs_removed: 0, links_created: 1 } });
+    }
+    /* Manual invoice → deal overrides (migration 010). opts.noLinkTable
+       simulates the migration not having been run: the panel must still work. */
+    if (url.pathname.startsWith('/rest/v1/qb_invoice_links')) {
+      if (opts.noLinkTable) return json(route, { message: 'relation "qb_invoice_links" does not exist' }, 404);
+      if (method === 'POST') {
+        state.qbLinks = state.qbLinks.filter((l) => l.qb_invoice_id !== body.qb_invoice_id);
+        state.qbLinks.unshift({ ...body });
+        return json(route, [body], 201);
+      }
+      if (method === 'DELETE') {
+        const m = url.search.match(/qb_invoice_id=eq\.([^&]+)/);
+        if (m) state.qbLinks = state.qbLinks.filter((l) => l.qb_invoice_id !== decodeURIComponent(m[1]));
+        return json(route, [], 204);
+      }
+      return json(route, project(req.url(), state.qbLinks));
     }
     if (url.pathname.startsWith('/rest/v1/deal_documents')) {
       const m = url.search.match(/deal_id=eq\.(\d+)/);
