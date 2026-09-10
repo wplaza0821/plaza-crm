@@ -681,6 +681,31 @@ Deno.serve(async (req) => {
       stale_won: r.staleWon.length,
       write_failures: failed,
       report,
+      /* Structured twin of `report`. The text array is for the alert email and
+         a human reading the row; the CRM's QuickBooks panel renders from these
+         instead, because parsing prose in the UI breaks the moment a wording
+         changes. Trimmed to what the panel shows — full detail stays in the
+         alert. */
+      findings: {
+        stale_won: r.staleWon.map(([d, age]: any) => ({
+          id: d.id, project_no: d.project_no, name: d.name, client: d.client,
+          proposal_sent_date: d.proposal_sent_date, days: age,
+        })),
+        review: r.review.map((x: any) => ({
+          id: x.deal.id, project_no: x.deal.project_no, name: x.deal.name,
+          stage: x.cur, invoices: x.n, amount: x.amt, why: x.why,
+        })),
+        unmapped: (() => {
+          const byCust = new Map<string, { customer: string; invoices: number; billed: number; open: number }>();
+          for (const inv of r.unmapped as any[]) {
+            const k = String(inv.cust || "(no customer)");
+            const e = byCust.get(k) ?? { customer: k, invoices: 0, billed: 0, open: 0 };
+            e.invoices++; e.billed += Number(inv.amt) || 0; e.open += Number(inv.bal) || 0;
+            byCust.set(k, e);
+          }
+          return [...byCust.values()].sort((a, b) => b.open - a.open || b.billed - a.billed);
+        })(),
+      },
     };
     await recordRun(started, failed === 0, stats, failed ? `${failed} write(s) failed` : null);
 

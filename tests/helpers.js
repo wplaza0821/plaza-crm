@@ -71,6 +71,24 @@ async function stubBackend(page, opts = {}) {
   const state = { deals: fixtureDeals(), docs: fixtureDocs(), activities: [], nextId: 100,
     syncRuns: opts.syncRuns || [
       { job: 'dropbox_docs', finished_at: new Date(Date.now() - 6 * 36e5).toISOString(), ok: true },
+      { job: 'qb_reconcile', finished_at: new Date(Date.now() - 3 * 36e5).toISOString(), ok: true,
+        stats: opts.qbStats !== undefined ? opts.qbStats : {
+          mode: 'applied', invoices: 198, deals: 129, write_failures: 0,
+          findings: {
+            stale_won: [
+              { id: 3, project_no: '26-103', name: 'North Bay Villas', client: 'NBV Assn',
+                proposal_sent_date: '2026-04-28', days: 135 },
+            ],
+            review: [
+              { id: 1, project_no: '26-101', name: 'Dome Repairs', stage: 'Proposal Sent',
+                invoices: 1, amount: 3500, why: 'customer-name match only, may include sibling projects' },
+            ],
+            unmapped: [
+              { customer: 'Venetian Manor Condominium Association', invoices: 21, billed: 1290423, open: 0 },
+              { customer: 'Bridge Industrial', invoices: 1, billed: 3600, open: 3600 },
+            ],
+          },
+        } },
     ] };
   // opts.strandedStage leaves a deal in a stage that has been retired
   if (opts.strandedStage) state.deals[1].stage = opts.strandedStage;
@@ -151,6 +169,13 @@ async function stubBackend(page, opts = {}) {
       if (opts.noSyncTable) return json(route, { message: 'relation "sync_runs" does not exist' }, 404);
       if (method === 'POST') { state.syncRuns.unshift({ ...body, id: state.nextId++ }); return json(route, [], 201); }
       return json(route, state.syncRuns);
+    }
+    // "Sync now" fires both jobs; qb-reconcile must be stubbed or it reads as a
+    // failure. opts.qbSyncFails exercises the one-failed-one-succeeded path.
+    if (url.pathname.startsWith('/functions/v1/qb-reconcile')) {
+      if (opts.qbSyncFails) return json(route, { ok: false, error: 'Intuit token rejected' }, 500);
+      state.syncRuns.unshift({ job: 'qb_reconcile', finished_at: new Date().toISOString(), ok: true });
+      return json(route, { ok: true, stats: { billing_refreshed: 2, stage_changes: 1, invoices: 198 } });
     }
     if (url.pathname.startsWith('/functions/v1/dropbox-docs-sync')) {
       if (opts.dropboxDown) return json(route, { error: 'Function not found' }, 404);

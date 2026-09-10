@@ -526,6 +526,7 @@ td .cl{font-size:11.5px;color:var(--gray-500)}
       <div class="nav-lbl">Reports</div>
       <a data-v="forecast"><span class="ico">&#9650;</span> Forecast</a>
       <a data-v="ar"><span class="ico">&#9788;</span> A/R pending <span class="cnt" id="c-ar"></span></a>
+      <a data-v="qb"><span class="ico">&#9878;</span> QuickBooks review <span class="cnt" id="c-qb"></span></a>
     </nav>
     <div class="rail-foot">
       <b id="who">&nbsp;</b>
@@ -818,7 +819,31 @@ const sumParts=list=>list.reduce((a,d)=>{const p=dealParts(d);
    zero. */
 const openBalance=d=>+d.qb_open_balance||0;
 const isAR=d=>d.stage==='Won'&&openBalance(d)>0;
+/* A deal with no qb_synced_at was never LOOKED at by the reconcile; a deal with
+   a stamp and no balance was looked at and genuinely owes nothing. Counting the
+   first as "unreconciled" was right, but the reconcile only stamps deals it
+   matched to an invoice, so proposals, losses and unbilled work — most of the
+   book — were reported as unchecked forever. The run itself is the evidence
+   that everything was examined: if the newest recorded run covers this deal's
+   universe, only a deal the run explicitly flagged is genuinely unresolved. */
 const unreconciled=list=>list.filter(d=>d.qb_synced_at==null).length;
+function qbFindings(){
+  const run=latestRun('qb_reconcile');
+  return (run&&run.stats&&run.stats.findings)||null;
+}
+function qbLastRun(){ return latestRun('qb_reconcile'); }
+/* Badge count: only what is genuinely actionable. Counting every unmapped
+   customer would read 48 against the real book, dominated by historic billing
+   that is fully collected — an unmapped customer with a zero balance is a
+   bookkeeping curiosity, not a task. An unmapped customer with money still
+   OPEN is receivable the CRM cannot see, so that one counts. */
+function qbOpenItems(){
+  const f=qbFindings();
+  if(!f) return null;
+  return (f.stale_won||[]).length
+       + (f.review||[]).length
+       + (f.unmapped||[]).filter(x=>(+x.open||0)>0).length;
+}
 /* QuickBooks gives one open balance per deal, never per phase — invoices
    aren't tagged Design vs CA. So the A/R phase split is necessarily an
    estimate: the balance prorated by the same design/ca shares as the
@@ -890,7 +915,8 @@ async function load(){
 /* ---------------- shell paint ---------------- */
 const TITLES={pipeline:['Workspace','Pipeline'],deals:['Workspace','All deals'],
   tasks:['Workspace','Needs follow-up'],contacts:['Workspace','Contacts'],
-  forecast:['Reports','Forecast'],ar:['Reports','A/R pending']};
+  forecast:['Reports','Forecast'],ar:['Reports','A/R pending'],
+  qb:['Reports','QuickBooks review']};
 function paint(){
   const t=TITLES[VIEW]||TITLES.pipeline;
   document.getElementById('crumb').textContent=t[0];
@@ -903,6 +929,7 @@ function paint(){
   const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
   set('c-pipeline',DEALS.length); set('c-deals',DEALS.length);
   set('c-tasks',od.length); set('c-contacts',cs.size); set('c-ar',ar.length);
+  const qbOpen=qbOpenItems(); set('c-qb',qbOpen==null?'':qbOpen);
   kpis(); toolbar(); renderView();
 }
 function kpis(){
@@ -921,7 +948,13 @@ function kpis(){
   const arDeals=DEALS.filter(isAR);
   const ar=arDeals.reduce((a,d)=>a+openBalance(d),0);
   const arP=sumArParts(arDeals);
-  const arNever=unreconciled(won);
+  /* Was: unreconciled(won) — the count of Won deals with no qb_synced_at, which
+     included every deal QuickBooks has simply never invoiced. It read as "we
+     have not checked" when the truth was "checked, nothing billed". Report the
+     run's own finding instead. */
+  const run=qbLastRun();
+  const f=qbFindings();
+  const arNever=f?(f.stale_won||[]).length:unreconciled(won);
   document.getElementById('kpis').innerHTML=`
    <div class="kpi"><small>Open pipeline</small><b>${money(openVal)||'$0'}</b>
      <div class="sub">${open.length} active deals</div>
@@ -935,11 +968,11 @@ function kpis(){
    <div class="kpi"><small>A/R pending</small><b>${money(ar)||'$0'}</b>
      <div class="sub">${arDeals.length} invoiced, awaiting payment</div>
      <div class="sub">${phaseLine(arP)||'&mdash;'}</div>
-     <div class="sub">${arNever?arNever+' won deal'+(arNever===1?'':'s')+' not yet in QB':'&mdash;'}</div></div>`;
+     <div class="sub">${arNever?`<a href="#" onclick="VIEW='qb';paint();return false" style="color:var(--red)">${arNever} won deal${arNever===1?'':'s'} never invoiced</a>`:'&mdash;'}</div></div>`;
 }
 function toolbar(){
   const b=document.getElementById('bar');
-  if(VIEW==='forecast'||VIEW==='contacts'){
+  if(VIEW==='forecast'||VIEW==='contacts'||VIEW==='qb'){
     b.innerHTML=`<button class="pri" id="ndBtn" style="margin-left:auto">&#65291; New deal</button>`;
     b.querySelector('#ndBtn').onclick=openNew;
     return;
@@ -984,8 +1017,103 @@ function renderView(){
   if(VIEW==='pipeline') return board(v,r);
   if(VIEW==='contacts') return contacts(v);
   if(VIEW==='forecast') return forecast(v);
+  if(VIEW==='qb') return qbReview(v);
   return table(v,r);
 }
+/* ---------------- QuickBooks review ----------------
+   The reconcile has always produced this; it went into sync_runs.stats and no
+   screen read it, so a job that was working looked broken. Rendered from
+   stats.findings (structured), never by parsing the text report. */
+function qbReview(v){
+  const run=qbLastRun(), f=qbFindings();
+  if(!run){
+    v.innerHTML=`<div class="empty">The QuickBooks reconcile has not recorded a run yet.<br>
+      <span style="font-size:12px;color:var(--gray-500)">It is scheduled weekdays at 7:15.
+      If this persists, check that migration 009 ran and qb_tokens is seeded.</span></div>`;
+    return;
+  }
+  if(!f){
+    v.innerHTML=`<div class="empty">The last run predates structured findings.<br>
+      <span style="font-size:12px;color:var(--gray-500)">Deploy the current qb-reconcile and
+      wait for the next run, or trigger one, to populate this panel.</span></div>`;
+    return;
+  }
+  const stale=f.stale_won||[], review=f.review||[], unmapped=f.unmapped||[];
+  const unmappedBilled=unmapped.reduce((a,x)=>a+(+x.billed||0),0);
+  const unmappedOpen=unmapped.reduce((a,x)=>a+(+x.open||0),0);
+  const st=run.stats||{};
+  let h=`<div style="font-size:12px;color:var(--gray-500);margin-bottom:14px">
+      Last run ${esc(ageText(run.finished_at))} · ${st.invoices||0} invoices · ${st.deals||0} deals
+      ${run.ok?'':' · <b style="color:var(--red)">failed</b>'}
+      ${st.write_failures?` · <b style="color:var(--red)">${st.write_failures} write failure(s)</b>`:''}
+    </div>`;
+
+  /* Won but never invoiced — the one section that is money not yet asked for. */
+  h+=`<div class="callout" style="border-left:3px solid ${stale.length?'var(--red)':'var(--accent)'};margin-bottom:16px">
+      <b>Won but never invoiced — ${stale.length}</b>
+      <div style="font-size:11.5px;color:var(--gray-500);margin-top:2px">
+        Marked Won in the CRM with no matching QuickBooks invoice. Either the invoice
+        has not been raised, or it exists under a customer the matcher cannot tie to
+        this project number.</div></div>`;
+  if(stale.length){
+    h+=`<div class="tbl-wrap"><table><thead><tr><th>Project</th><th>Deal</th>
+        <th>Proposal sent</th><th class="num">Days</th><th class="num">Contract</th></tr></thead><tbody>`;
+    for(const x of stale){
+      const d=DEALS.find(y=>y.id===x.id);
+      h+=`<tr${d?` onclick="open_(${x.id})" style="cursor:pointer"`:''}>
+        <td><span class="pill pn">${esc(x.project_no||'—')}</span></td>
+        <td><div class="nm">${esc(x.name||'')}</div><div class="cl">${esc(x.client||'')}</div></td>
+        <td>${esc(x.proposal_sent_date||'n/a')}</td>
+        <td class="num">${x.days==null?'—':`<span class="${x.days>90?'err':''}">${x.days}d</span>`}</td>
+        <td class="num">${d?money(dealParts(d).total)||'—':'—'}</td></tr>`;
+    }
+    h+='</tbody></table></div>';
+  }
+
+  /* Flagged: matched on weak evidence, deliberately not auto-applied. */
+  h+=`<div class="callout" style="border-left:3px solid ${review.length?'#b0761c':'var(--accent)'};margin:18px 0 10px">
+      <b>Needs review — ${review.length}</b>
+      <div style="font-size:11.5px;color:var(--gray-500);margin-top:2px">
+        Invoices that matched on weak evidence. Left unapplied on purpose: a
+        customer-name match can sweep in a sibling project's money.</div></div>`;
+  if(review.length){
+    h+=`<div class="tbl-wrap"><table><thead><tr><th>Project</th><th>Deal</th><th>Stage</th>
+        <th class="num">Invoices</th><th class="num">Amount</th><th>Why held</th></tr></thead><tbody>`;
+    for(const x of review){
+      const d=DEALS.find(y=>y.id===x.id);
+      h+=`<tr${d?` onclick="open_(${x.id})" style="cursor:pointer"`:''}>
+        <td><span class="pill pn">${esc(x.project_no||'—')}</span></td>
+        <td><div class="nm">${esc(x.name||'')}</div></td>
+        <td>${esc(x.stage||'')}</td>
+        <td class="num">${x.invoices||0}</td>
+        <td class="num">${money(x.amount)||'$0'}</td>
+        <td style="font-size:12px;color:var(--gray-500)">${esc(x.why||'')}</td></tr>`;
+    }
+    h+='</tbody></table></div>';
+  }
+
+  /* Invoices with no deal: mostly historic billing, but the open column is A/R
+     the CRM cannot see, so it leads. */
+  h+=`<div class="callout" style="border-left:3px solid ${unmappedOpen?'var(--red)':'var(--accent)'};margin:18px 0 10px">
+      <b>QuickBooks invoices with no deal — ${unmapped.length} customer(s)</b>
+      <div style="font-size:11.5px;color:var(--gray-500);margin-top:2px">
+        ${money(unmappedBilled)} billed, <b>${money(unmappedOpen)||'$0'} still open</b>.
+        Matching is by project number only — a name match would merge sibling projects
+        and corrupt the figures. Open balances here are receivable the CRM is not counting.</div></div>`;
+  if(unmapped.length){
+    h+=`<div class="tbl-wrap"><table><thead><tr><th>QuickBooks customer</th>
+        <th class="num">Invoices</th><th class="num">Billed</th><th class="num">Open</th></tr></thead><tbody>`;
+    for(const x of unmapped){
+      h+=`<tr><td>${esc(x.customer||'')}</td>
+        <td class="num">${x.invoices||0}</td>
+        <td class="num">${money(x.billed)||'—'}</td>
+        <td class="num">${x.open?`<b class="err">${money(x.open)}</b>`:'—'}</td></tr>`;
+    }
+    h+='</tbody></table></div>';
+  }
+  v.innerHTML=h;
+}
+
 /* kanban board */
 function board(v,r){
   const pr={HIGH:0,MEDIUM:1,LOW:2};

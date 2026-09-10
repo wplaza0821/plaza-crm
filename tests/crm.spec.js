@@ -446,13 +446,15 @@ test('rail footer shows sync freshness and Sync now runs the job', async ({ page
   const docs = page.locator('#syncstat .row', { hasText: 'Documents' });
   await expect(docs).toContainText('6h ago');
   await expect(docs).toHaveClass(/\bok\b/);
-  // No qb_reconcile run is recorded, so QuickBooks freshness falls back to the
-  // newest qb_synced_at on the deals (North Bay, 2026-08-30) — old enough to be red
+  // a qb_reconcile run 3h ago is recorded, so QuickBooks reads fresh from the
+  // run itself rather than falling back to a per-deal stamp
   const qb = page.locator('#syncstat .row', { hasText: 'QuickBooks' });
-  await expect(qb).not.toContainText('never');
-  await expect(qb).toHaveClass(/\bcrit\b/);
+  await expect(qb).toContainText('3h ago');
+  await expect(qb).toHaveClass(/\bok\b/);
   await page.locator('#syncNow').click();
-  await expect(page.locator('#toast')).toContainText('Synced 5 documents across 3 deals');
+  // one click runs both jobs and reports each
+  await expect(page.locator('#toast')).toContainText('5 documents across 3 deals');
+  await expect(page.locator('#toast')).toContainText('2 deals rebilled from QuickBooks');
   await expect(docs).toContainText('just now');
   expect(errors).toEqual([]);
 });
@@ -479,6 +481,15 @@ test('footer survives the sync_runs table not existing yet', async ({ page }) =>
   expect(errors).toEqual([]);
 });
 
+test('one job failing still reports the other', async ({ page }) => {
+  await stubBackend(page, { qbSyncFails: true });
+  await bootCrm(page);
+  await page.locator('#syncNow').click();
+  // documents succeeded, QuickBooks did not: both are said, neither masks the other
+  await expect(page.locator('#toast')).toContainText('Sync failed — QuickBooks');
+  await expect(page.locator('#syncNow')).toBeEnabled();
+});
+
 test('Sync now reports a failure and re-enables itself', async ({ page }) => {
   await stubBackend(page, { dropboxDown: true });
   await bootCrm(page);
@@ -496,6 +507,51 @@ test('a non-JSON function error surfaces its real message', async ({ page }) => 
   // the plain-text body is shown, not "Unexpected token 'u'"
   await expect(page.locator('#livedocs')).toContainText('unexpected error occurred');
   await expect(page.locator('#livedocs')).not.toContainText('is not valid JSON');
+});
+
+test('QuickBooks review surfaces what the reconcile found', async ({ page }) => {
+  await stubBackend(page);
+  const errors = await bootCrm(page);
+  await page.locator('#nav a[data-v="qb"]').click();
+  const view = page.locator('#view');
+  await expect(view).toContainText('Won but never invoiced — 1');
+  await expect(view).toContainText('North Bay Villas');
+  await expect(view).toContainText('Needs review — 1');
+  await expect(view).toContainText('customer-name match only');
+  await expect(view).toContainText('Venetian Manor');
+  // the open balance leads, since that is receivable the CRM cannot see
+  await expect(view).toContainText('$3,600 still open');
+  // badge counts actionable items only: 1 stale + 1 review + 1 unmapped WITH an
+  // open balance. Venetian Manor is fully collected and is not a task.
+  await expect(page.locator('#c-qb')).toHaveText('3');
+  expect(errors).toEqual([]);
+});
+
+test('A/R KPI reports deals never invoiced, not deals never checked', async ({ page }) => {
+  await stubBackend(page);
+  await bootCrm(page);
+  const kpi = page.locator('.kpi', { hasText: 'A/R pending' });
+  // one stale_won in the fixture; the old count would have said 2 (both Won
+  // deals lacking qb_synced_at, including ones QuickBooks simply never billed)
+  await expect(kpi).toContainText('1 won deal never invoiced');
+  await kpi.locator('a').click();
+  await expect(page.locator('#view')).toContainText('Won but never invoiced');
+});
+
+test('QuickBooks panel explains itself when no run is recorded', async ({ page }) => {
+  await stubBackend(page, { syncRuns: [] });
+  const errors = await bootCrm(page);
+  await page.locator('#nav a[data-v="qb"]').click();
+  await expect(page.locator('#view')).toContainText('has not recorded a run yet');
+  await expect(page.locator('#c-qb')).toHaveText('');
+  expect(errors).toEqual([]);
+});
+
+test('a run without structured findings says so rather than rendering blank', async ({ page }) => {
+  await stubBackend(page, { qbStats: { mode: 'applied', invoices: 198, deals: 129 } });
+  await bootCrm(page);
+  await page.locator('#nav a[data-v="qb"]').click();
+  await expect(page.locator('#view')).toContainText('predates structured findings');
 });
 
 test('mobile viewport: burger nav present, board scrolls', async ({ page }) => {
